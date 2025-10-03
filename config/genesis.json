@@ -1,0 +1,27 @@
+{
+  "chainId": 1,
+  "timestamp": 1704067200,
+  "difficulty": "0x1000",
+  "alloc": {
+    "DT1faucetAddress123456789": {
+      "dnt": "100000000000",
+      "afc": "0"
+    },
+    "DT1treasuryAddress987654321": {
+      "dnt": "0",
+      "afc": "1000000000000"
+    }
+  },
+  "mintAuthorities": {
+    "afc": [
+      "D61GJ9HxAzAgpuXyjufjhSeqiRbPTctJHn"
+    ],
+    "threshold": 1
+  },
+  "consensus": {
+    "targetBlockTime": 15,
+    "difficultyWindow": 120,
+    "initialReward": "5000000000",
+    "halvingInterval": 210000
+  }
+}
