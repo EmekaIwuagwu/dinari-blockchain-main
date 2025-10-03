@@ -1,0 +1,45 @@
+# scripts/dinari-node.service
+[Unit]
+Description=Dinari Blockchain Testnet Node
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dinari
+Group=dinari
+WorkingDirectory=/opt/dinari-blockchain
+ExecStart=/opt/dinari-blockchain/bin/dinari-node \
+    --datadir=/opt/dinari-blockchain/data \
+    --rpc=0.0.0.0:8545 \
+    --p2p=/ip4/0.0.0.0/tcp/9000 \
+    --loglevel=info
+
+# Restart policy
+Restart=always
+RestartSec=10
+
+# Resource limits for 1GB RAM
+MemoryMax=900M
+MemoryHigh=768M
+CPUQuota=100%
+
+# Environment
+Environment="GOGC=50"
+Environment="GOMEMLIMIT=768MiB"
+Environment="DINARI_NETWORK=testnet"
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/dinari-blockchain/data
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dinari-node
+
+[Install]
+WantedBy=multi-user.target

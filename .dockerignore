@@ -1,0 +1,62 @@
+# .dockerignore
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Documentation
+*.md
+docs/
+LICENSE
+
+# Development files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Test files
+*_test.go
+test/
+testdata/
+
+# Build artifacts
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Data directories
+data/
+logs/
+tmp/
+
+# IDE
+.DS_Store
+Thumbs.db
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Scripts not needed in container
+scripts/deploy-aws.sh
+scripts/health-check.sh
+scripts/monitor.sh
+scripts/run.bat
+scripts/run.sh
+
+# Docker
+docker-compose.yml
+Dockerfile
+.dockerignore
+
+# Other
+rename.ps1
+coverage.txt
+coverage.html
+*.log

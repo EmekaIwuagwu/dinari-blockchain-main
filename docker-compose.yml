@@ -1,0 +1,43 @@
+# docker-compose.yml
+version: '3.8'
+
+services:
+  dinari-node:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dinari-testnet-node
+    restart: unless-stopped
+    ports:
+      - "8545:8545"  # RPC port
+      - "9000:9000"  # P2P port
+    volumes:
+      - dinari-data:/app/data
+      - ./config:/app/config:ro
+    environment:
+      - DINARI_NETWORK=testnet
+      - GOGC=50
+      - GOMEMLIMIT=768MiB
+    command: >
+      --datadir=/app/data
+      --rpc=0.0.0.0:8545
+      --p2p=/ip4/0.0.0.0/tcp/9000
+      --loglevel=info
+    mem_limit: 900m
+    mem_reservation: 512m
+    cpus: 1.0
+    networks:
+      - dinari-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  dinari-data:
+    driver: local
+
+networks:
+  dinari-network:
+    driver: bridge
