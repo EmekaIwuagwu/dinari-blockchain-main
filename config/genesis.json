@@ -6,15 +6,11 @@
     "DB2bn6uXpiFFxmmfVa1fPkAcgEUHMAG9yB": {
       "dnt": "100000000000",
       "afc": "50000000000"
-    },
-    "D[YOUR_ADDRESS_2]": {
-      "dnt": "50000000000",
-      "afc": "100000000000"
     }
   },
   "mintAuthorities": {
     "afc": [
-      "D[YOUR_ADDRESS_3_MINT_AUTHORITY]"
+      "DB2bn6uXpiFFxmmfVa1fPkAcgEUHMAG9yB"
     ],
     "threshold": 1
   },
