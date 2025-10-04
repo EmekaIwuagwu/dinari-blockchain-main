@@ -3,18 +3,18 @@
   "timestamp": 1704067200,
   "difficulty": "0x1000",
   "alloc": {
-    "DT1faucetAddress123456789": {
+    "DB2bn6uXpiFFxmmfVa1fPkAcgEUHMAG9yB": {
       "dnt": "100000000000",
-      "afc": "0"
+      "afc": "50000000000"
     },
-    "DT1treasuryAddress987654321": {
-      "dnt": "0",
-      "afc": "1000000000000"
+    "D[YOUR_ADDRESS_2]": {
+      "dnt": "50000000000",
+      "afc": "100000000000"
     }
   },
   "mintAuthorities": {
     "afc": [
-      "DB2bn6uXpiFFxmmfVa1fPkAcgEUHMAG9yB"
+      "D[YOUR_ADDRESS_3_MINT_AUTHORITY]"
     ],
     "threshold": 1
   },
