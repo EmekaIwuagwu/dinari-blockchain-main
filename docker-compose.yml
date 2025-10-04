@@ -18,11 +18,17 @@ services:
       - DINARI_NETWORK=testnet
       - GOGC=50
       - GOMEMLIMIT=768MiB
+      # IMPORTANT: Set your D-prefix miner address here
+      - MINER_ADDRESS=${MINER_ADDRESS:-DB2bn6uXpiFFxmmfVa1fPkAcgEUHMAG9yB}
+    # Override CMD to ensure environment variable is passed correctly
     command: >
-      --datadir=/app/data
-      --rpc=0.0.0.0:8545
-      --p2p=/ip4/0.0.0.0/tcp/9000
-      --loglevel=info
+      sh -c './dinari-node 
+      --datadir=/app/data 
+      --rpc=0.0.0.0:8545 
+      --p2p=/ip4/0.0.0.0/tcp/9000 
+      --loglevel=info 
+      --miner=$${MINER_ADDRESS} 
+      --mine'
     mem_limit: 900m
     mem_reservation: 512m
     cpus: 1.0

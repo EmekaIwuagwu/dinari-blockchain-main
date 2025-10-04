@@ -53,4 +53,5 @@ RUN addgroup -g 1000 dinari && \
 USER dinari
 
 ENTRYPOINT ["./dinari-node"]
-CMD ["--datadir=/app/data", "--rpc=0.0.0.0:8545", "--p2p=/ip4/0.0.0.0/tcp/9000", "--loglevel=info"]
+# IMPORTANT: Use environment variable for miner address
+CMD ["sh", "-c", "./dinari-node --datadir=/app/data --rpc=0.0.0.0:8545 --p2p=/ip4/0.0.0.0/tcp/9000 --loglevel=info --miner=${MINER_ADDRESS} --mine"]

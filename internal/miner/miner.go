@@ -104,6 +104,7 @@ func (m *Miner) IsRunning() bool {
 }
 
 // miningLoop is the main mining loop
+// miningLoop is the main mining loop
 func (m *Miner) miningLoop() {
 	for {
 		select {
@@ -119,6 +120,14 @@ func (m *Miner) miningLoop() {
 			}
 
 			if block != nil {
+				// Calculate reward info for logging
+				baseReward := m.rewardCalc.CalculateBlockReward(block.Header.Number)
+				totalFees := big.NewInt(0)
+				for _, tx := range block.Transactions[1:] {
+					totalFees.Add(totalFees, tx.FeeDNT)
+				}
+				totalReward := new(big.Int).Add(baseReward, totalFees)
+
 				// Add block to blockchain
 				if err := m.blockchain.AddBlock(block); err != nil {
 					m.logger.Error("Failed to add mined block", zap.Error(err))
@@ -127,11 +136,15 @@ func (m *Miner) miningLoop() {
 
 				m.blocksMinedCount++
 
-				m.logger.Info("Block mined successfully",
+				m.logger.Info("🎉 BLOCK MINED SUCCESSFULLY! 🎉",
 					zap.Uint64("height", block.Header.Number),
-					zap.String("hash", fmt.Sprintf("%x", block.Hash[:8])),
+					zap.String("hash", fmt.Sprintf("%x", block.Hash[:16])),
 					zap.Uint32("txCount", block.Header.TxCount),
-					zap.String("reward", m.rewardCalc.CalculateBlockReward(block.Header.Number).String()))
+					zap.String("miner", m.minerAddress),
+					zap.String("baseReward", baseReward.String()),
+					zap.String("fees", totalFees.String()),
+					zap.String("totalReward", totalReward.String()),
+					zap.Uint64("nonce", block.Header.Nonce))
 
 				// Remove mined transactions from mempool
 				for _, tx := range block.Transactions {

@@ -204,6 +204,7 @@ func (bc *Blockchain) validateDifficulty(block *types.Block) error {
 	return bc.difficultyAdjust.ValidateDifficulty(block.Header.Number, block.Header.Difficulty, recentBlocks)
 }
 
+
 // validateBlockTransactions validates all transactions in a block
 func (bc *Blockchain) validateBlockTransactions(block *types.Block) error {
 	if len(block.Transactions) == 0 {
@@ -215,7 +216,6 @@ func (bc *Blockchain) validateBlockTransactions(block *types.Block) error {
 	if !coinbaseTx.IsCoinbase() {
 		return types.ErrMissingCoinbase
 	}
-
 
 	// Validate coinbase reward (base reward + transaction fees)
 	baseReward := bc.rewardCalc.CalculateBlockReward(block.Header.Number)
@@ -241,7 +241,15 @@ func (bc *Blockchain) validateBlockTransactions(block *types.Block) error {
 		return types.ErrInvalidReward
 	}
 
-		for _, tx := range block.Transactions[1:] {
+	// ADD THIS: Log successful coinbase validation with D-address
+	bc.logger.Info("✅ Coinbase transaction validated",
+		zap.Uint64("blockNumber", block.Header.Number),
+		zap.String("miner", coinbaseTx.To),
+		zap.String("reward", expectedReward.String()),
+		zap.String("baseReward", baseReward.String()),
+		zap.String("fees", totalFees.String()))
+
+	for _, tx := range block.Transactions[1:] {
 		if tx.IsMint() {
 			// Verify it's AFC being minted
 			if tx.TokenType != string(types.TokenAFC) {
@@ -249,10 +257,6 @@ func (bc *Blockchain) validateBlockTransactions(block *types.Block) error {
 					zap.String("tokenType", tx.TokenType))
 				return types.ErrMintOnlyAFC
 			}
-			
-			// For now, we'll skip minter authorization check during block validation
-			// The mempool already validated it when accepting the transaction
-			// This prevents issues with historical blocks
 			
 			// Mint transactions should have zero fee
 			if tx.FeeDNT.Cmp(big.NewInt(0)) != 0 {

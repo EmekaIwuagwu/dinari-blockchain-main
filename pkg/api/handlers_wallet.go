@@ -34,6 +34,7 @@ func (s *RPCServer) handleWalletCreate(params json.RawMessage) (interface{}, *RP
 	}, nil
 }
 
+
 // handleWalletBalance returns the balance for an address
 func (s *RPCServer) handleWalletBalance(params json.RawMessage) (interface{}, *RPCError) {
 	var req struct {
@@ -44,16 +45,29 @@ func (s *RPCServer) handleWalletBalance(params json.RawMessage) (interface{}, *R
 		return nil, &RPCError{Code: -32602, Message: "invalid params"}
 	}
 
-	// Validate address
+	// Validate D-prefix address
 	if err := crypto.ValidateAddress(req.Address); err != nil {
-		return nil, &RPCError{Code: -32602, Message: "invalid address"}
+		s.logger.Warn("❌ Invalid D-address in balance request",
+			zap.String("address", req.Address),
+			zap.Error(err))
+		return nil, &RPCError{Code: -32602, Message: "invalid D-address format"}
 	}
 
 	// Get account
 	account, err := s.blockchain.GetState().GetAccount(req.Address)
 	if err != nil {
+		s.logger.Error("Failed to get account",
+			zap.String("address", req.Address),
+			zap.Error(err))
 		return nil, &RPCError{Code: -32000, Message: "failed to get account"}
 	}
+
+	// Log balance query
+	s.logger.Info("💰 Balance queried",
+		zap.String("address", req.Address),
+		zap.String("balanceDNT", account.BalanceDNT.String()),
+		zap.String("balanceAFC", account.BalanceAFC.String()),
+		zap.Uint64("nonce", account.Nonce))
 
 	return map[string]interface{}{
 		"address":    account.Address,

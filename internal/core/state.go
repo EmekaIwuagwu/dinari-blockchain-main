@@ -200,6 +200,13 @@ func (s *State) Commit() error {
 			return err
 		}
 
+		// Enhanced logging with D-address
+		s.logger.Info("💾 Committing account state to database",
+			zap.String("address", address),
+			zap.String("balanceDNT", account.BalanceDNT.String()),
+			zap.String("balanceAFC", account.BalanceAFC.String()),
+			zap.Uint64("nonce", account.Nonce))
+
 		// Update cache
 		s.cache[address] = account.Copy()
 	}
@@ -208,6 +215,9 @@ func (s *State) Commit() error {
 	if err := batch.Flush(); err != nil {
 		return fmt.Errorf("failed to commit state: %w", err)
 	}
+
+	s.logger.Info("✅ State committed successfully",
+		zap.Int("accountsUpdated", len(s.dirty)))
 
 	// Clear dirty map
 	s.dirty = make(map[string]*types.Account)
@@ -252,11 +262,34 @@ func (s *State) Copy() *State {
 func (s *State) ApplyTransaction(tx *types.Transaction) error {
 	// Handle coinbase transaction
 	if tx.IsCoinbase() {
-		return s.AddBalance(tx.To, tx.Amount, string(types.TokenDNT))
+		s.logger.Info("💰 Applying coinbase transaction",
+			zap.String("miner", tx.To),
+			zap.String("amount", tx.Amount.String()),
+			zap.Uint64("blockNonce", tx.Nonce))
+		
+		err := s.AddBalance(tx.To, tx.Amount, string(types.TokenDNT))
+		
+		if err == nil {
+			// Log the account state after adding balance
+			account, _ := s.GetAccount(tx.To)
+			s.logger.Info("✅ Coinbase reward applied to miner",
+				zap.String("miner", tx.To),
+				zap.String("newBalanceDNT", account.BalanceDNT.String()),
+				zap.String("rewardAdded", tx.Amount.String()))
+		} else {
+			s.logger.Error("❌ Failed to apply coinbase reward",
+				zap.String("miner", tx.To),
+				zap.Error(err))
+		}
+		
+		return err
 	}
 
 	// Handle mint transaction
 	if tx.IsMint() {
+		s.logger.Info("🪙 Applying mint transaction",
+			zap.String("to", tx.To),
+			zap.String("amount", tx.Amount.String()))
 		return s.AddBalance(tx.To, tx.Amount, string(types.TokenAFC))
 	}
 
