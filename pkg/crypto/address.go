@@ -16,7 +16,7 @@ const (
 	// 0x1E produces addresses starting with "DT"
 	// 0x1A produces addresses starting with "D" (some variants)
 	// For clean "D" prefix, we can use 0x1A or test to find exact byte
-	AddressVersion = 0x1A // UPDATE THIS - produces D-prefix
+	AddressVersion = 0x1E // UPDATE THIS - produces D-prefix
 
 	// AddressLength is the expected length of a D address
 	AddressLength = 34
