@@ -2,7 +2,7 @@ package api
 
 import (
 	"encoding/json"
-
+	"go.uber.org/zap"
 	"github.com/EmekaIwuagwu/dinari-blockchain/pkg/crypto"
 )
 
