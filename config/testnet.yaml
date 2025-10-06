@@ -1,0 +1,329 @@
+# config/testnet.yaml
+# Dinari Blockchain - TESTNET Configuration
+# This is for testing and development - NOT for real economic value
+
+network:
+  name: "dinari-testnet"
+  chain_id: 42  # DIFFERENT from mainnet (prevents replay attacks)
+  protocol_version: 1
+  network_type: "testnet"
+  
+  # Genesis block configuration
+  genesis:
+    timestamp: 1704067200
+    difficulty: "0x1000"  # Lower difficulty for faster mining
+    allocations:
+      # Testnet pre-allocations for development
+      "DB2bn6uXpiFFxmmfVa1fPkAcgEUHMAG9yB":
+        dnt: "100000000000"  # 1000 DNT
+        afc: "50000000000"   # 500 AFC
+      "DTESTtestTESTtestTESTtestTEST1234":
+        dnt: "50000000000"   # 500 DNT
+        afc: "25000000000"   # 250 AFC
+    
+  # Mint authorities for AFC token (TESTNET)
+  mint_authorities:
+    afc:
+      # Test addresses - these have no mainnet value
+      - "DB2bn6uXpiFFxmmfVa1fPkAcgEUHMAG9yB"
+      - "DTESTtestTESTtestTESTtestTEST1234"
+    threshold: 1  # Only need 1 signature for testing
+    enable_minting: true
+
+consensus:
+  # Block timing (same as mainnet for realistic testing)
+  target_block_time: 15  # seconds
+  difficulty_adjustment_window: 120  # blocks
+  difficulty_adjustment_interval: 1800  # seconds
+  
+  # Block limits (same as mainnet)
+  max_block_size: 2097152  # 2MB
+  max_transactions_per_block: 10000
+  max_transaction_size: 32768  # 32KB
+  
+  # Mining rewards (same as mainnet)
+  initial_block_reward: 5000000000  # 50 DNT
+  halving_interval: 210000  # blocks
+  
+  # Timestamp validation (more lenient for testing)
+  max_future_block_time: 7200  # 2 hours
+  median_time_blocks: 11
+  
+  # Chain security (more permissive for testing reorgs)
+  max_reorg_depth: 1000  # Allow deeper reorgs for testing
+  checkpoint_interval: 5000  # More frequent checkpoints
+  
+  # Difficulty bounds
+  min_difficulty: 4096  # 0x1000
+  max_difficulty_adjustment: 4.0
+  min_difficulty_adjustment: 0.25
+
+p2p:
+  # Network listening
+  listen_address: "0.0.0.0:9000"  # Different port from mainnet
+  external_address: ""
+  
+  # Peer management (smaller network expected)
+  max_inbound_peers: 25
+  max_outbound_peers: 25
+  target_peer_count: 15
+  max_peer_connections: 60
+  
+  # Peer discovery (enable mDNS for local testing)
+  enable_mdns: true  # Auto-discover local peers
+  enable_dht: true
+  bootstrap_nodes:
+    # Testnet bootstrap nodes
+    - "/ip4/157.230.16.150/tcp/9000/p2p/12D3KooWTestNode1"
+    - "/dns4/testnet-seed.dinari.network/tcp/9000/p2p/12D3KooWTestNode2"
+  
+  # Connection settings
+  dial_timeout: 15s
+  handshake_timeout: 10s
+  
+  # Message limits (more permissive for testing)
+  max_message_size: 10485760  # 10MB
+  message_rate_limit: 5000  # Higher limit for stress testing
+  block_rate_limit: 50
+  tx_rate_limit: 500
+  
+  # Peer reputation (enabled but lenient)
+  peer_reputation_enabled: true
+  min_peer_score: -200
+  ban_peer_score: -500
+  ban_duration: 3600  # 1 hour (shorter than mainnet)
+  
+  # Network security
+  require_peer_tls: false  # Disabled for easier testing
+  trusted_peers: []
+
+rpc:
+  # Server configuration
+  enabled: true
+  listen_address: "0.0.0.0:8545"
+  
+  # TLS/HTTPS (optional for testnet)
+  tls:
+    enabled: false  # Can enable for TLS testing
+    cert_file: "/etc/dinari/testnet/tls/server.crt"
+    key_file: "/etc/dinari/testnet/tls/server.key"
+    require_client_cert: false
+  
+  # Authentication (optional for testnet)
+  authentication:
+    enabled: false  # Easier development without auth
+    method: "api_key"
+    api_keys_file: "/etc/dinari/testnet/api_keys.json"
+  
+  # Rate limiting (present but higher limits)
+  rate_limiting:
+    enabled: true
+    global_limit: 10000  # Much higher for testing
+    per_ip_limit: 1000
+    per_api_key_limit: 5000
+    burst_size: 200
+    
+  # IP filter (disabled for testnet)
+  ip_filter:
+    enabled: false
+    whitelist: []
+    blacklist: []
+  
+  # CORS settings (permissive for development)
+  cors:
+    enabled: true
+    allowed_origins: ["*"]  # Allow all origins in testnet
+    allowed_methods: ["POST", "GET", "OPTIONS"]
+    allowed_headers: ["*"]
+    max_age: 3600
+  
+  # Request limits
+  max_request_size: 2097152  # 2MB for testing large requests
+  read_timeout: 60s  # Longer timeouts
+  write_timeout: 60s
+  idle_timeout: 300s
+  
+  # Endpoint settings (all public in testnet)
+  endpoints:
+    public:
+      - "chain_getHeight"
+      - "chain_getBlock"
+      - "chain_getBlocks"
+      - "chain_getStats"
+      - "tx_get"
+      - "tx_send"
+      - "tx_listByWallet"
+      - "wallet_balance"
+      - "wallet_create"
+      - "mempool_stats"
+      - "miner_start"
+      - "miner_stop"
+      - "miner_status"
+      - "afc_mint"
+      rate_limit: 1000  # Per minute
+    
+    admin:
+      require_admin_key: false  # No admin restrictions in testnet
+
+database:
+  # BadgerDB configuration
+  path: "/var/lib/dinari/testnet/data"
+  
+  # Performance settings (optimized for development)
+  cache_size_mb: 256  # Smaller cache for testnet
+  max_open_files: 1000
+  value_log_file_size: 268435456  # 256MB
+  
+  # Durability settings (can be relaxed for faster testing)
+  sync_writes: false  # Faster but less safe (OK for testnet)
+  detect_conflicts: true
+  compact_l0_on_close: true
+  
+  # Memory management
+  max_table_size: 33554432  # 32MB
+  max_levels: 7
+  level_size_multiplier: 10
+  
+  # Garbage collection
+  value_gc_threshold: 0.5
+  num_compactors: 2
+  num_level_zero_tables: 5
+  num_level_zero_tables_stall: 10
+  
+  # Backup settings (less frequent)
+  backup_enabled: true
+  backup_interval: 86400  # Daily
+  backup_path: "/var/lib/dinari/testnet/backups"
+  backup_retention_days: 7  # Keep 1 week
+
+mining:
+  # Mining enabled by default for testnet nodes
+  enabled: false  # Still requires explicit flag
+  miner_address: ""  # Set via environment or CLI
+  
+  # Mining limits
+  max_block_template_age: 600  # 10 minutes (more lenient)
+  min_tx_fee: 100  # Lower minimum fee for testing
+  
+  # Resource limits
+  max_mining_threads: 0
+  mining_intensity: "normal"
+
+mempool:
+  # Size limits (smaller for testnet)
+  max_size: 10000
+  max_size_bytes: 104857600  # 100MB
+  
+  # Transaction limits
+  max_tx_size: 32768
+  min_tx_fee: 100  # Lower for testing
+  max_tx_age: 43200  # 12 hours (shorter)
+  
+  # RBF
+  rbf_enabled: true
+  rbf_min_fee_increase: 1.1  # Only 10% increase needed
+  
+  # Eviction policy
+  eviction_enabled: true
+  eviction_threshold: 0.90
+
+logging:
+  # Log level (more verbose for debugging)
+  level: "debug"  # OK to use debug in testnet
+  format: "console"  # Human-readable for development
+  output: "/var/log/dinari/testnet.log"
+  
+  # Log rotation
+  rotate: true
+  max_size_mb: 50
+  max_backups: 5
+  max_age_days: 7
+  compress: true
+  
+  # Sensitive data filtering
+  sanitize_logs: false  # Show everything in testnet for debugging
+  
+  # Component-specific levels
+  components:
+    consensus: "debug"
+    p2p: "info"
+    rpc: "debug"
+    miner: "debug"
+    mempool: "info"
+    state: "debug"
+
+monitoring:
+  # Metrics export
+  prometheus:
+    enabled: true
+    listen_address: "0.0.0.0:9090"  # Publicly accessible in testnet
+    path: "/metrics"
+  
+  # Health checks
+  health_check:
+    enabled: true
+    listen_address: "0.0.0.0:8080"  # Publicly accessible
+    path: "/health"
+  
+  # Tracing (useful for debugging)
+  tracing:
+    enabled: false
+    jaeger_endpoint: "http://localhost:14268/api/traces"
+
+security:
+  # Panic recovery (always enabled)
+  recover_from_panics: true
+  
+  # Resource limits (lower for testnet)
+  max_memory_mb: 1024  # 1GB for 1GB RAM servers
+  max_cpu_percent: 90
+  
+  # Secure defaults (still maintain validation)
+  disable_dangerous_rpc: false  # Allow debug RPCs in testnet
+  strict_validation: true  # Still validate inputs
+  
+  # Audit logging (optional)
+  audit_log:
+    enabled: false
+    path: "/var/log/dinari/testnet-audit.log"
+
+alerts:
+  # Alerts (less critical for testnet)
+  enabled: false
+  
+  # Thresholds (more lenient)
+  thresholds:
+    memory_usage_percent: 90
+    cpu_usage_percent: 95
+    disk_usage_percent: 95
+    min_peer_count: 1
+    max_block_time: 600  # 10 minutes
+
+# Feature flags (all enabled for testing)
+features:
+  enable_new_consensus_rules: true  # Test new features
+  enable_experimental_features: true
+  enable_debug_endpoints: true  # Expose debug RPCs
+
+# Version information
+version:
+  protocol: 1
+  software: "1.0.0-testnet"
+  minimum_compatible: "1.0.0"
+
+# Development helpers
+development:
+  # Auto-mining for single-node testing
+  auto_mine: false
+  auto_mine_interval: 15  # seconds
+  
+  # Faucet settings (for distributing test tokens)
+  faucet:
+    enabled: false
+    address: "DB2bn6uXpiFFxmmfVa1fPkAcgEUHMAG9yB"
+    drip_amount_dnt: "1000000000"  # 10 DNT
+    drip_amount_afc: "500000000"   # 5 AFC
+    cooldown: 3600  # 1 hour between drips per address
+  
+  # Reset/wipe helpers
+  allow_chain_reset: true  # Dangerous! Only for testnet

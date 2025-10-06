@@ -1,0 +1,333 @@
+# config/mainnet.yaml
+# Dinari Blockchain - MAINNET Configuration
+# WARNING: This is production configuration for real economic value
+# Any changes must be reviewed by security team
+
+network:
+  name: "dinari-mainnet"
+  chain_id: 1
+  protocol_version: 1
+  network_type: "mainnet"
+  
+  # Genesis block configuration
+  genesis:
+    timestamp: 1704067200  # January 1, 2024 00:00:00 UTC
+    difficulty: "0x100000"  # Initial difficulty (higher than testnet)
+    allocations:
+      # Pre-mine allocations (carefully audited)
+      # Format: "address": {"dnt": "amount", "afc": "amount"}
+      # PRODUCTION: Use real allocation addresses here
+    
+  # Mint authorities for AFC token (CRITICAL SECURITY)
+  mint_authorities:
+    afc:
+      # PRODUCTION: Replace with real mainnet authority addresses
+      # These addresses have power to mint AFC - must be secured
+      - "DMAINNET_AUTHORITY_ADDRESS_1"
+      - "DMAINNET_AUTHORITY_ADDRESS_2"
+      - "DMAINNET_AUTHORITY_ADDRESS_3"
+    threshold: 2  # Require 2-of-3 signatures for minting
+    enable_minting: true
+
+consensus:
+  # Block timing
+  target_block_time: 15  # seconds
+  difficulty_adjustment_window: 120  # blocks
+  difficulty_adjustment_interval: 1800  # seconds (30 minutes)
+  
+  # Block limits
+  max_block_size: 2097152  # 2MB
+  max_transactions_per_block: 10000
+  max_transaction_size: 32768  # 32KB
+  
+  # Mining rewards (in satoshis)
+  initial_block_reward: 5000000000  # 50 DNT
+  halving_interval: 210000  # blocks (~36.5 days at 15s blocks)
+  
+  # Timestamp validation
+  max_future_block_time: 7200  # 2 hours tolerance
+  median_time_blocks: 11  # Use median of last 11 blocks
+  
+  # Chain security
+  max_reorg_depth: 100  # Maximum safe reorganization depth
+  checkpoint_interval: 10000  # Checkpoint every 10k blocks
+  
+  # Difficulty bounds (prevent manipulation)
+  min_difficulty: 4096  # 0x1000
+  max_difficulty_adjustment: 4.0  # Max 4x increase per adjustment
+  min_difficulty_adjustment: 0.25  # Max 75% decrease per adjustment
+
+p2p:
+  # Network listening
+  listen_address: "0.0.0.0:26656"
+  external_address: ""  # Auto-detect or set explicitly
+  
+  # Peer management
+  max_inbound_peers: 50
+  max_outbound_peers: 50
+  target_peer_count: 40
+  max_peer_connections: 125  # Total limit
+  
+  # Peer discovery
+  enable_mdns: false  # Disable mDNS on mainnet (security)
+  enable_dht: true
+  bootstrap_nodes:
+    # PRODUCTION: Add real mainnet bootstrap nodes
+    - "/dns4/seed1.dinari.network/tcp/26656/p2p/PEER_ID_1"
+    - "/dns4/seed2.dinari.network/tcp/26656/p2p/PEER_ID_2"
+    - "/dns4/seed3.dinari.network/tcp/26656/p2p/PEER_ID_3"
+  
+  # Connection settings
+  dial_timeout: 15s
+  handshake_timeout: 10s
+  
+  # Message limits (DDoS protection)
+  max_message_size: 10485760  # 10MB
+  message_rate_limit: 1000  # messages per second per peer
+  block_rate_limit: 10  # blocks per second per peer
+  tx_rate_limit: 100  # transactions per second per peer
+  
+  # Peer reputation
+  peer_reputation_enabled: true
+  min_peer_score: -100
+  ban_peer_score: -200
+  ban_duration: 86400  # 24 hours
+  
+  # Network security
+  require_peer_tls: false  # Set true when TLS implemented
+  trusted_peers: []  # Whitelist specific peers if needed
+
+rpc:
+  # Server configuration
+  enabled: true
+  listen_address: "0.0.0.0:8545"
+  
+  # TLS/HTTPS (REQUIRED for mainnet)
+  tls:
+    enabled: true
+    cert_file: "/etc/dinari/tls/server.crt"
+    key_file: "/etc/dinari/tls/server.key"
+    require_client_cert: false  # Set true for mutual TLS
+  
+  # Authentication (REQUIRED for mainnet)
+  authentication:
+    enabled: true
+    method: "api_key"  # Options: api_key, jwt, mtls
+    api_keys_file: "/etc/dinari/api_keys.json"  # External file for keys
+    jwt_secret_file: "/etc/dinari/jwt_secret"  # If using JWT
+  
+  # Rate limiting (CRITICAL for DDoS protection)
+  rate_limiting:
+    enabled: true
+    global_limit: 1000  # requests per minute globally
+    per_ip_limit: 100  # requests per minute per IP
+    per_api_key_limit: 500  # requests per minute per API key
+    burst_size: 50  # Allow burst of 50 requests
+    
+  # IP whitelisting/blacklisting
+  ip_filter:
+    enabled: false
+    whitelist: []  # Only allow these IPs (if enabled)
+    blacklist: []  # Block these IPs
+  
+  # CORS settings
+  cors:
+    enabled: true
+    allowed_origins:
+      - "https://wallet.dinari.network"
+      - "https://explorer.dinari.network"
+    allowed_methods: ["POST", "GET", "OPTIONS"]
+    allowed_headers: ["Content-Type", "Authorization"]
+    max_age: 3600
+  
+  # Request limits
+  max_request_size: 1048576  # 1MB
+  read_timeout: 30s
+  write_timeout: 30s
+  idle_timeout: 120s
+  
+  # Endpoint-specific settings
+  endpoints:
+    # Public endpoints (lower limits)
+    public:
+      - "chain_getHeight"
+      - "chain_getBlock"
+      - "tx_get"
+      - "wallet_balance"
+      rate_limit: 60  # per minute
+    
+    # Sensitive endpoints (higher authentication requirements)
+    admin:
+      - "miner_start"
+      - "miner_stop"
+      - "afc_mint"
+      require_admin_key: true
+      rate_limit: 10  # per minute
+
+database:
+  # BadgerDB configuration
+  path: "/var/lib/dinari/mainnet/data"
+  
+  # Performance settings
+  cache_size_mb: 1024  # 1GB cache for mainnet
+  max_open_files: 2000
+  value_log_file_size: 1073741824  # 1GB
+  
+  # Durability settings (CRITICAL)
+  sync_writes: true  # fsync on every write (slower but safer)
+  detect_conflicts: true
+  compact_l0_on_close: true
+  
+  # Memory management
+  max_table_size: 67108864  # 64MB
+  max_levels: 7
+  level_size_multiplier: 10
+  
+  # Garbage collection
+  value_gc_threshold: 0.5  # Run GC when 50% garbage
+  num_compactors: 4
+  num_level_zero_tables: 5
+  num_level_zero_tables_stall: 10
+  
+  # Backup settings
+  backup_enabled: true
+  backup_interval: 21600  # 6 hours
+  backup_path: "/var/lib/dinari/backups"
+  backup_retention_days: 30
+
+mining:
+  # Mining will be disabled by default on most nodes
+  # Miners should explicitly enable and configure
+  enabled: false
+  miner_address: ""  # Must be set via environment variable
+  
+  # Mining limits
+  max_block_template_age: 300  # 5 minutes
+  min_tx_fee: 1000  # Minimum 1000 satoshis fee
+  
+  # Resource limits
+  max_mining_threads: 0  # 0 = auto-detect CPU cores
+  mining_intensity: "normal"  # low, normal, high
+
+mempool:
+  # Size limits
+  max_size: 50000  # Maximum transactions in mempool
+  max_size_bytes: 524288000  # 500MB total
+  
+  # Transaction limits
+  max_tx_size: 32768  # 32KB
+  min_tx_fee: 1000  # Minimum fee (satoshis)
+  max_tx_age: 86400  # 24 hours
+  
+  # RBF (Replace-By-Fee)
+  rbf_enabled: true
+  rbf_min_fee_increase: 1.25  # 25% increase required
+  
+  # Eviction policy
+  eviction_enabled: true
+  eviction_threshold: 0.95  # Evict when 95% full
+
+logging:
+  # Log level: debug, info, warn, error, fatal
+  level: "info"  # NEVER use debug in production
+  format: "json"  # json or console
+  output: "/var/log/dinari/node.log"
+  
+  # Log rotation
+  rotate: true
+  max_size_mb: 100
+  max_backups: 10
+  max_age_days: 30
+  compress: true
+  
+  # Sensitive data filtering
+  sanitize_logs: true  # Remove private keys, passwords from logs
+  
+  # Component-specific levels
+  components:
+    consensus: "info"
+    p2p: "info"
+    rpc: "info"
+    miner: "info"
+    mempool: "info"
+    state: "info"
+
+monitoring:
+  # Metrics export
+  prometheus:
+    enabled: true
+    listen_address: "127.0.0.1:9090"  # Internal only
+    path: "/metrics"
+  
+  # Health checks
+  health_check:
+    enabled: true
+    listen_address: "127.0.0.1:8080"  # Internal only
+    path: "/health"
+  
+  # Tracing (optional, for debugging)
+  tracing:
+    enabled: false
+    jaeger_endpoint: ""
+
+security:
+  # Panic recovery
+  recover_from_panics: true
+  
+  # Resource limits (Linux cgroups-style)
+  max_memory_mb: 4096  # 4GB limit
+  max_cpu_percent: 80
+  
+  # Secure defaults
+  disable_dangerous_rpc: true  # Disable any debug/test RPCs
+  strict_validation: true  # Maximum validation on all inputs
+  
+  # Audit logging
+  audit_log:
+    enabled: true
+    path: "/var/log/dinari/audit.log"
+    events:
+      - "authentication_failure"
+      - "miner_start"
+      - "miner_stop"
+      - "afc_mint"
+      - "config_change"
+      - "peer_ban"
+
+alerts:
+  # Alert destinations
+  enabled: true
+  
+  # Critical alerts (PagerDuty, SMS)
+  critical:
+    - "consensus_failure"
+    - "database_corruption"
+    - "chain_reorg_deep"
+    - "network_partition"
+  
+  # Warning alerts (Email, Slack)
+  warning:
+    - "high_memory_usage"
+    - "high_cpu_usage"
+    - "disk_space_low"
+    - "peer_count_low"
+  
+  # Thresholds
+  thresholds:
+    memory_usage_percent: 85
+    cpu_usage_percent: 90
+    disk_usage_percent: 90
+    min_peer_count: 5
+    max_block_time: 300  # 5 minutes without new block
+
+# Feature flags (for gradual rollout)
+features:
+  enable_new_consensus_rules: false
+  enable_experimental_features: false
+  enable_debug_endpoints: false
+
+# Version information
+version:
+  protocol: 1
+  software: "1.0.0"
+  minimum_compatible: "1.0.0"
