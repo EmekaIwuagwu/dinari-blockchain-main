@@ -1,491 +1,419 @@
-// pkg/crypto/signature.go
 package crypto
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/big"
 
 	"github.com/btcsuite/btcd/btcec/v2"
-	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
+	"github.com/btcsuite/btcutil/base58"
+	"golang.org/x/crypto/ripemd160"
 )
 
-// Signature validation errors
 var (
-	ErrInvalidSignatureLength = errors.New("invalid signature length")
-	ErrInvalidPublicKey       = errors.New("invalid public key")
-	ErrInvalidPrivateKey      = errors.New("invalid private key")
-	ErrSignatureFailed        = errors.New("signature generation failed")
-	ErrVerificationFailed     = errors.New("signature verification failed")
-	ErrRecoveryFailed         = errors.New("public key recovery failed")
-	ErrInvalidRecoveryID      = errors.New("invalid recovery ID")
-	ErrDataTooShort           = errors.New("data too short for signing")
-	ErrNilInput               = errors.New("nil input provided")
+	// secp256k1 curve parameters
+	secp256k1N     = btcec.S256().N
+	secp256k1HalfN = new(big.Int).Rsh(secp256k1N, 1)
+
+	// Error definitions
+	ErrInvalidSignatureLen     = errors.New("invalid signature length")
+	ErrInvalidPublicKey        = errors.New("invalid public key")
+	ErrInvalidPrivateKey       = errors.New("invalid private key")
+	ErrSignatureVerification   = errors.New("signature verification failed")
+	ErrNonCanonicalSignature   = errors.New("non-canonical signature")
+	ErrPublicKeyNotOnCurve     = errors.New("public key not on curve")
+	ErrInvalidAddress          = errors.New("invalid address format")
+	ErrInvalidChecksum         = errors.New("invalid address checksum")
+	ErrInsufficientRandomness  = errors.New("insufficient randomness")
 )
 
 const (
-	// CompactSignatureSize is the size of a compact signature with recovery ID
-	CompactSignatureSize = 65
-
-	// StandardSignatureSize is the size of a standard DER signature
-	StandardSignatureSize = 64
-
-	// MinDataSize is the minimum size of data that can be signed
-	MinDataSize = 1
-
-	// MaxDataSize is the maximum size of data that can be signed (32MB)
-	MaxDataSize = 32 * 1024 * 1024
+	// Address prefix for Dinari blockchain
+	AddressPrefix = "DT"
+	// Version byte for addresses
+	AddressVersion = 0x1E
+	// Checksum length
+	ChecksumLen = 4
+	// Private key length in bytes
+	PrivateKeyLen = 32
+	// Public key length in compressed format
+	PublicKeyCompressedLen = 33
+	// Public key length in uncompressed format
+	PublicKeyUncompressedLen = 65
+	// Signature length (R + S)
+	SignatureLen = 64
+	// Signature with recovery ID length
+	SignatureRecoveryLen = 65
 )
 
-// SignData signs arbitrary data with a private key using ECDSA
-// Returns a standard signature (64 bytes: 32 bytes R + 32 bytes S)
-// This function is constant-time where possible to prevent timing attacks
-func SignData(data []byte, privKey *btcec.PrivateKey) ([]byte, error) {
-	// Validate inputs
-	if err := validateSigningInputs(data, privKey); err != nil {
-		return nil, fmt.Errorf("input validation failed: %w", err)
-	}
-
-	// Hash the data with SHA-256
-	hash := sha256.Sum256(data)
-
-	// Sign using ECDSA (compact format)
-	signature := ecdsa.Sign(privKey, hash[:])
-	if signature == nil {
-		return nil, ErrSignatureFailed
-	}
-
-	// Serialize to compact format (R || S)
-	serialized := signature.Serialize()
-	if len(serialized) != StandardSignatureSize {
-		return nil, fmt.Errorf("%w: got %d bytes, expected %d", 
-			ErrInvalidSignatureLength, len(serialized), StandardSignatureSize)
-	}
-
-	return serialized, nil
+// PrivateKey represents a secp256k1 private key
+type PrivateKey struct {
+	D *big.Int
+	key *btcec.PrivateKey
 }
 
-// VerifySignature verifies a signature against data and a public key
-// Uses constant-time comparison where possible to prevent timing attacks
-func VerifySignature(data []byte, signature []byte, pubKey *btcec.PublicKey) bool {
-	// Validate inputs (return false rather than error for signature verification)
-	if err := validateVerificationInputs(data, signature, pubKey); err != nil {
+// PublicKey represents a secp256k1 public key
+type PublicKey struct {
+	X, Y *big.Int
+	key *btcec.PublicKey
+}
+
+// GenerateKey generates a new private/public key pair using cryptographically secure randomness
+func GenerateKey() (*PrivateKey, error) {
+	// Use crypto/rand for secure random generation
+	privKeyBytes := make([]byte, PrivateKeyLen)
+	n, err := rand.Read(privKeyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate random bytes: %w", err)
+	}
+	if n != PrivateKeyLen {
+		return nil, ErrInsufficientRandomness
+	}
+
+	// Ensure private key is within valid range [1, n-1]
+	privKeyInt := new(big.Int).SetBytes(privKeyBytes)
+	if privKeyInt.Cmp(secp256k1N) >= 0 || privKeyInt.Sign() == 0 {
+		// Retry if outside valid range (extremely rare)
+		return GenerateKey()
+	}
+
+	privKey, pubKey := btcec.PrivKeyFromBytes(privKeyBytes)
+	
+	return &PrivateKey{
+		D: privKey.ToECDSA().D,
+		key: privKey,
+	}, nil
+}
+
+// PrivateKeyFromBytes creates a private key from bytes with validation
+func PrivateKeyFromBytes(b []byte) (*PrivateKey, error) {
+	if len(b) != PrivateKeyLen {
+		return nil, fmt.Errorf("%w: expected %d bytes, got %d", ErrInvalidPrivateKey, PrivateKeyLen, len(b))
+	}
+
+	privKeyInt := new(big.Int).SetBytes(b)
+	
+	// Validate private key is in valid range [1, n-1]
+	if privKeyInt.Sign() == 0 {
+		return nil, fmt.Errorf("%w: private key cannot be zero", ErrInvalidPrivateKey)
+	}
+	if privKeyInt.Cmp(secp256k1N) >= 0 {
+		return nil, fmt.Errorf("%w: private key exceeds curve order", ErrInvalidPrivateKey)
+	}
+
+	privKey, _ := btcec.PrivKeyFromBytes(b)
+	
+	return &PrivateKey{
+		D: privKeyInt,
+		key: privKey,
+	}, nil
+}
+
+// PrivateKeyFromHex creates a private key from hex string
+func PrivateKeyFromHex(s string) (*PrivateKey, error) {
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		return nil, fmt.Errorf("invalid hex string: %w", err)
+	}
+	return PrivateKeyFromBytes(b)
+}
+
+// PublicKey returns the public key corresponding to the private key
+func (priv *PrivateKey) PublicKey() *PublicKey {
+	pubKey := priv.key.PubKey()
+	return &PublicKey{
+		X: pubKey.X(),
+		Y: pubKey.Y(),
+		key: pubKey,
+	}
+}
+
+// Bytes returns the private key as bytes
+func (priv *PrivateKey) Bytes() []byte {
+	return priv.key.Serialize()
+}
+
+// Hex returns the private key as hex string
+func (priv *PrivateKey) Hex() string {
+	return hex.EncodeToString(priv.Bytes())
+}
+
+// PublicKeyFromBytes creates a public key from bytes with validation
+func PublicKeyFromBytes(b []byte) (*PublicKey, error) {
+	if len(b) != PublicKeyCompressedLen && len(b) != PublicKeyUncompressedLen {
+		return nil, fmt.Errorf("%w: invalid length %d", ErrInvalidPublicKey, len(b))
+	}
+
+	pubKey, err := btcec.ParsePubKey(b)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidPublicKey, err)
+	}
+
+	// Validate point is on curve
+	if !pubKey.IsOnCurve() {
+		return nil, ErrPublicKeyNotOnCurve
+	}
+
+	return &PublicKey{
+		X: pubKey.X(),
+		Y: pubKey.Y(),
+		key: pubKey,
+	}, nil
+}
+
+// PublicKeyFromHex creates a public key from hex string
+func PublicKeyFromHex(s string) (*PublicKey, error) {
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		return nil, fmt.Errorf("invalid hex string: %w", err)
+	}
+	return PublicKeyFromBytes(b)
+}
+
+// Bytes returns the compressed public key bytes
+func (pub *PublicKey) Bytes() []byte {
+	return pub.key.SerializeCompressed()
+}
+
+// Hex returns the compressed public key as hex string
+func (pub *PublicKey) Hex() string {
+	return hex.EncodeToString(pub.Bytes())
+}
+
+// IsOnCurve checks if the public key point is on the secp256k1 curve
+func (pub *PublicKey) IsOnCurve() bool {
+	return pub.key.IsOnCurve()
+}
+
+// Sign creates a signature for a message hash using the private key
+// Returns signature in compact format (R || S) - 64 bytes
+func Sign(hash []byte, privateKey *PrivateKey) ([]byte, error) {
+	if len(hash) != 32 {
+		return nil, fmt.Errorf("hash must be 32 bytes, got %d", len(hash))
+	}
+	if privateKey == nil || privateKey.key == nil {
+		return nil, ErrInvalidPrivateKey
+	}
+
+	// Sign using RFC 6979 deterministic ECDSA (prevents nonce reuse attacks)
+	signature := ecdsa.SignASN1(rand.Reader, privateKey.key.ToECDSA(), hash)
+	if len(signature) == 0 {
+		return nil, errors.New("signing failed")
+	}
+
+	// Parse DER signature
+	sig, err := btcec.ParseDERSignature(signature)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse signature: %w", err)
+	}
+
+	// Ensure canonical signature (low S value) - BIP-62 rule 5
+	if sig.S.Cmp(secp256k1HalfN) > 0 {
+		sig.S.Sub(secp256k1N, sig.S)
+	}
+
+	// Return compact signature (R || S)
+	sigBytes := make([]byte, SignatureLen)
+	rBytes := sig.R.Bytes()
+	sBytes := sig.S.Bytes()
+	
+	copy(sigBytes[32-len(rBytes):32], rBytes)
+	copy(sigBytes[64-len(sBytes):64], sBytes)
+
+	return sigBytes, nil
+}
+
+// Verify verifies a signature against a message hash and public key
+// Uses constant-time comparison to prevent timing attacks
+func Verify(hash []byte, signature []byte, publicKey *PublicKey) bool {
+	if len(hash) != 32 {
+		return false
+	}
+	if publicKey == nil || publicKey.key == nil {
+		return false
+	}
+	if len(signature) != SignatureLen && len(signature) != SignatureRecoveryLen {
 		return false
 	}
 
-	// Hash the data
-	hash := sha256.Sum256(data)
-
-	// Parse the signature
-	sig, err := ecdsa.ParseSignature(signature)
+	// Extract R and S from signature
+	sig, err := parseCompactSignature(signature)
 	if err != nil {
 		return false
 	}
 
-	// Verify the signature using constant-time operations where possible
-	return sig.Verify(hash[:], pubKey)
+	// Verify signature is canonical (low S value)
+	if !IsCanonical(signature) {
+		return false
+	}
+
+	// Verify using constant-time operations where possible
+	return ecdsa.Verify(publicKey.key.ToECDSA(), hash, sig.R, sig.S)
 }
 
-// RecoverPublicKey recovers the public key from a signature and data
-// Requires a compact signature (65 bytes) with recovery ID
-func RecoverPublicKey(data []byte, signature []byte) (*btcec.PublicKey, error) {
-	// Validate inputs
-	if err := validateRecoveryInputs(data, signature); err != nil {
-		return nil, fmt.Errorf("input validation failed: %w", err)
+// VerifyWithRecovery verifies signature and recovers public key
+func VerifyWithRecovery(hash []byte, signature []byte) (*PublicKey, error) {
+	if len(signature) != SignatureRecoveryLen {
+		return nil, ErrInvalidSignatureLen
 	}
 
-	// Hash the data
-	hash := sha256.Sum256(data)
-
-	// Extract and validate recovery ID
-	recoveryID := signature[0]
-	if recoveryID < 27 {
-		return nil, fmt.Errorf("%w: recovery ID must be >= 27, got %d", 
-			ErrInvalidRecoveryID, recoveryID)
+	// Extract recovery ID
+	recoveryID := signature[64]
+	if recoveryID > 3 {
+		return nil, errors.New("invalid recovery ID")
 	}
 
-	adjustedRecoveryID := recoveryID - 27
-	if adjustedRecoveryID > 3 {
-		return nil, fmt.Errorf("%w: recovery ID out of range (0-3), got %d", 
-			ErrInvalidRecoveryID, adjustedRecoveryID)
-	}
-
-	// Attempt recovery
-	pubKey, _, err := ecdsa.RecoverCompact(signature, hash[:])
+	// Parse signature
+	sig, err := parseCompactSignature(signature[:64])
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrRecoveryFailed, err)
+		return nil, err
 	}
 
-	if pubKey == nil {
-		return nil, fmt.Errorf("%w: recovered nil public key", ErrRecoveryFailed)
-	}
-
-	return pubKey, nil
-}
-
-// SignCompact signs data and returns a compact signature with recovery info (65 bytes)
-// This allows public key recovery from the signature
-// Format: [recovery_id (1 byte)][r (32 bytes)][s (32 bytes)]
-func SignCompact(data []byte, privKey *btcec.PrivateKey) ([]byte, error) {
-	// Validate inputs
-	if err := validateSigningInputs(data, privKey); err != nil {
-		return nil, fmt.Errorf("input validation failed: %w", err)
-	}
-
-	// Hash the data
-	hash := sha256.Sum256(data)
-
-	// Sign with compact format (includes recovery ID)
-	// The 'false' parameter means we're not signing for Ethereum (different format)
-	signature, err := ecdsa.SignCompact(privKey, hash[:], false)
+	// Recover public key
+	pubKey, _, err := btcec.RecoverCompact(signature, hash)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrSignatureFailed, err)
+		return nil, fmt.Errorf("public key recovery failed: %w", err)
 	}
 
-	// Validate signature length
-	if len(signature) != CompactSignatureSize {
-		return nil, fmt.Errorf("%w: expected %d bytes, got %d", 
-			ErrInvalidSignatureLength, CompactSignatureSize, len(signature))
+	// Verify recovered public key
+	if !ecdsa.Verify(pubKey.ToECDSA(), hash, sig.R, sig.S) {
+		return nil, ErrSignatureVerification
 	}
 
-	return signature, nil
+	return &PublicKey{
+		X: pubKey.X(),
+		Y: pubKey.Y(),
+		key: pubKey,
+	}, nil
 }
 
-// VerifyCompact verifies a compact signature and recovers the public key
-// Returns true if signature is valid and recovered key matches expected key
-// Uses constant-time comparison for the public key check
-func VerifyCompact(data []byte, signature []byte, expectedPubKey *btcec.PublicKey) (bool, error) {
-	// Validate inputs
-	if err := validateRecoveryInputs(data, signature); err != nil {
-		return false, fmt.Errorf("input validation failed: %w", err)
+// IsCanonical checks if signature has low S value (BIP-62 canonical signature)
+// This prevents signature malleability attacks
+func IsCanonical(sig []byte) bool {
+	if len(sig) < SignatureLen {
+		return false
 	}
 
-	if expectedPubKey == nil {
-		return false, fmt.Errorf("%w: expected public key is nil", ErrInvalidPublicKey)
-	}
+	// Extract S value (last 32 bytes)
+	sBytes := sig[32:64]
+	s := new(big.Int).SetBytes(sBytes)
 
-	// Recover public key from signature
-	recoveredPubKey, err := RecoverPublicKey(data, signature)
-	if err != nil {
-		return false, fmt.Errorf("recovery failed: %w", err)
-	}
-
-	// Compare public keys using constant-time comparison
-	// This prevents timing attacks that could leak information about the key
-	expectedBytes := expectedPubKey.SerializeCompressed()
-	recoveredBytes := recoveredPubKey.SerializeCompressed()
-
-	if len(expectedBytes) != len(recoveredBytes) {
-		return false, nil
-	}
-
-	// Use subtle.ConstantTimeCompare for timing-attack resistance
-	if subtle.ConstantTimeCompare(expectedBytes, recoveredBytes) != 1 {
-		return false, nil
-	}
-
-	return true, nil
+	// S must be in lower half of curve order
+	return s.Cmp(secp256k1HalfN) <= 0
 }
 
-// HashData returns SHA-256 hash of data
-// This is a convenience function that ensures consistent hashing
-func HashData(data []byte) [32]byte {
-	if data == nil {
-		// Return hash of empty data rather than panicking
-		return sha256.Sum256([]byte{})
+// parseCompactSignature parses R and S from compact signature format
+func parseCompactSignature(sig []byte) (*btcec.Signature, error) {
+	if len(sig) != SignatureLen {
+		return nil, ErrInvalidSignatureLen
 	}
-	return sha256.Sum256(data)
+
+	r := new(big.Int).SetBytes(sig[:32])
+	s := new(big.Int).SetBytes(sig[32:64])
+
+	// Validate R and S are in valid range
+	if r.Sign() == 0 || r.Cmp(secp256k1N) >= 0 {
+		return nil, errors.New("invalid R value")
+	}
+	if s.Sign() == 0 || s.Cmp(secp256k1N) >= 0 {
+		return nil, errors.New("invalid S value")
+	}
+
+	return btcec.NewSignature(r, s), nil
 }
 
-// DoubleHashData returns double SHA-256 hash (Bitcoin-style)
-// Used for additional security in some contexts
-func DoubleHashData(data []byte) [32]byte {
-	if data == nil {
-		data = []byte{}
+// PublicKeyToAddress derives Dinari address from public key
+// Format: DT + Base58Check(RIPEMD160(SHA256(pubkey)))
+func PublicKeyToAddress(pub *PublicKey) string {
+	// 1. SHA-256 hash of public key
+	sha := sha256.Sum256(pub.Bytes())
+
+	// 2. RIPEMD-160 hash
+	ripemd := ripemd160.New()
+	ripemd.Write(sha[:])
+	pubKeyHash := ripemd.Sum(nil)
+
+	// 3. Add version byte
+	versionedPayload := append([]byte{AddressVersion}, pubKeyHash...)
+
+	// 4. Calculate checksum (first 4 bytes of double SHA-256)
+	checksum := doubleSHA256(versionedPayload)[:ChecksumLen]
+
+	// 5. Append checksum
+	fullPayload := append(versionedPayload, checksum...)
+
+	// 6. Base58 encode and add prefix
+	return AddressPrefix + base58.Encode(fullPayload)
+}
+
+// ValidateAddress checks if an address is valid
+func ValidateAddress(address string) error {
+	// Check prefix
+	if len(address) < len(AddressPrefix) {
+		return ErrInvalidAddress
 	}
+	if address[:len(AddressPrefix)] != AddressPrefix {
+		return fmt.Errorf("%w: invalid prefix", ErrInvalidAddress)
+	}
+
+	// Decode Base58
+	decoded := base58.Decode(address[len(AddressPrefix):])
+	if len(decoded) < ChecksumLen+1 {
+		return fmt.Errorf("%w: invalid length", ErrInvalidAddress)
+	}
+
+	// Extract version, payload, and checksum
+	version := decoded[0]
+	payload := decoded[:len(decoded)-ChecksumLen]
+	checksum := decoded[len(decoded)-ChecksumLen:]
+
+	// Verify version
+	if version != AddressVersion {
+		return fmt.Errorf("%w: invalid version byte", ErrInvalidAddress)
+	}
+
+	// Verify checksum using constant-time comparison
+	expectedChecksum := doubleSHA256(payload)[:ChecksumLen]
+	if subtle.ConstantTimeCompare(checksum, expectedChecksum) != 1 {
+		return ErrInvalidChecksum
+	}
+
+	return nil
+}
+
+// AddressToPublicKeyHash extracts the public key hash from an address
+func AddressToPublicKeyHash(address string) ([]byte, error) {
+	if err := ValidateAddress(address); err != nil {
+		return nil, err
+	}
+
+	decoded := base58.Decode(address[len(AddressPrefix):])
+	// Skip version byte, exclude checksum
+	return decoded[1 : len(decoded)-ChecksumLen], nil
+}
+
+// doubleSHA256 performs double SHA-256 hashing
+func doubleSHA256(data []byte) []byte {
 	first := sha256.Sum256(data)
 	second := sha256.Sum256(first[:])
-	return second
+	return second[:]
 }
 
-// SignWithNonce signs data with a specific nonce (for deterministic signatures)
-// WARNING: Using a bad nonce can compromise the private key!
-// Only use this if you know what you're doing. For normal use, use SignData or SignCompact.
-func SignWithNonce(data []byte, privKey *btcec.PrivateKey, nonce []byte) ([]byte, error) {
-	if err := validateSigningInputs(data, privKey); err != nil {
-		return nil, fmt.Errorf("input validation failed: %w", err)
-	}
-
-	if len(nonce) != 32 {
-		return nil, fmt.Errorf("nonce must be exactly 32 bytes, got %d", len(nonce))
-	}
-
-	// This is a simplified implementation
-	// In production, you'd use RFC6979 deterministic ECDSA
-	return nil, errors.New("deterministic signatures not yet implemented")
+// SecureCompare performs constant-time comparison of two byte slices
+// Returns true if equal, prevents timing attacks
+func SecureCompare(a, b []byte) bool {
+	return subtle.ConstantTimeCompare(a, b) == 1
 }
 
-// VerifyMultiSignature verifies multiple signatures for the same data
-// Returns true only if ALL signatures are valid
-// This is useful for multi-sig scenarios
-func VerifyMultiSignature(data []byte, signatures [][]byte, pubKeys []*btcec.PublicKey) bool {
-	if len(signatures) != len(pubKeys) {
-		return false
-	}
-
-	if len(signatures) == 0 {
-		return false
-	}
-
-	// Verify each signature
-	for i := range signatures {
-		if !VerifySignature(data, signatures[i], pubKeys[i]) {
-			return false
-		}
-	}
-
-	return true
-}
-
-// CompareSignatures compares two signatures in constant time
-// Returns true if they are equal
-func CompareSignatures(sig1, sig2 []byte) bool {
-	if len(sig1) != len(sig2) {
-		return false
-	}
-	return subtle.ConstantTimeCompare(sig1, sig2) == 1
-}
-
-// ValidateSignatureFormat checks if a signature has a valid format
-// without performing cryptographic verification
-func ValidateSignatureFormat(signature []byte) error {
-	if signature == nil {
-		return fmt.Errorf("%w: signature is nil", ErrNilInput)
-	}
-
-	sigLen := len(signature)
-
-	// Check for standard sizes
-	switch sigLen {
-	case StandardSignatureSize, CompactSignatureSize:
-		return nil
-	default:
-		// Check if it might be a DER-encoded signature
-		if sigLen >= 8 && sigLen <= 72 {
-			// DER signatures are variable length but typically 70-72 bytes
-			// We accept them but note they need special parsing
-			return nil
-		}
-		return fmt.Errorf("%w: unexpected signature length %d", 
-			ErrInvalidSignatureLength, sigLen)
-	}
-}
-
-// Input validation functions
-
-// validateSigningInputs validates inputs for signing operations
-func validateSigningInputs(data []byte, privKey *btcec.PrivateKey) error {
-	if data == nil {
-		return fmt.Errorf("%w: data is nil", ErrNilInput)
-	}
-
-	if len(data) < MinDataSize {
-		return fmt.Errorf("%w: data must be at least %d byte", 
-			ErrDataTooShort, MinDataSize)
-	}
-
-	if len(data) > MaxDataSize {
-		return fmt.Errorf("data too large: %d bytes (max: %d)", 
-			len(data), MaxDataSize)
-	}
-
-	if privKey == nil {
-		return fmt.Errorf("%w: private key is nil", ErrInvalidPrivateKey)
-	}
-
-	// Validate that the private key is within the valid range
-	// The key should be in the range [1, n-1] where n is the curve order
-	keyBytes := privKey.Serialize()
-	if len(keyBytes) != 32 {
-		return fmt.Errorf("%w: invalid key size %d", 
-			ErrInvalidPrivateKey, len(keyBytes))
-	}
-
-	// Check if key is zero (invalid)
-	allZero := true
-	for _, b := range keyBytes {
-		if b != 0 {
-			allZero = false
-			break
-		}
-	}
-	if allZero {
-		return fmt.Errorf("%w: private key is zero", ErrInvalidPrivateKey)
-	}
-
-	return nil
-}
-
-// validateVerificationInputs validates inputs for verification operations
-func validateVerificationInputs(data []byte, signature []byte, pubKey *btcec.PublicKey) error {
-	if data == nil {
-		return fmt.Errorf("%w: data is nil", ErrNilInput)
-	}
-
-	if len(data) < MinDataSize {
-		return fmt.Errorf("%w: data must be at least %d byte", 
-			ErrDataTooShort, MinDataSize)
-	}
-
-	if signature == nil {
-		return fmt.Errorf("%w: signature is nil", ErrNilInput)
-	}
-
-	if err := ValidateSignatureFormat(signature); err != nil {
-		return err
-	}
-
-	if pubKey == nil {
-		return fmt.Errorf("%w: public key is nil", ErrInvalidPublicKey)
-	}
-
-	// Validate public key format
-	pubKeyBytes := pubKey.SerializeCompressed()
-	if len(pubKeyBytes) != 33 {
-		return fmt.Errorf("%w: invalid compressed public key length %d", 
-			ErrInvalidPublicKey, len(pubKeyBytes))
-	}
-
-	// Compressed public keys start with 0x02 or 0x03
-	if pubKeyBytes[0] != 0x02 && pubKeyBytes[0] != 0x03 {
-		return fmt.Errorf("%w: invalid compressed public key prefix 0x%x", 
-			ErrInvalidPublicKey, pubKeyBytes[0])
-	}
-
-	return nil
-}
-
-// validateRecoveryInputs validates inputs for public key recovery
-func validateRecoveryInputs(data []byte, signature []byte) error {
-	if data == nil {
-		return fmt.Errorf("%w: data is nil", ErrNilInput)
-	}
-
-	if len(data) < MinDataSize {
-		return fmt.Errorf("%w: data must be at least %d byte", 
-			ErrDataTooShort, MinDataSize)
-	}
-
-	if signature == nil {
-		return fmt.Errorf("%w: signature is nil", ErrNilInput)
-	}
-
-	if len(signature) != CompactSignatureSize {
-		return fmt.Errorf("%w: compact signature must be %d bytes, got %d", 
-			ErrInvalidSignatureLength, CompactSignatureSize, len(signature))
-	}
-
-	return nil
-}
-
-// SecurityAudit contains security-related information about signature operations
-type SecurityAudit struct {
-	ConstantTimeOps bool   // Whether constant-time operations were used
-	TimingResistant bool   // Whether the operation is resistant to timing attacks
-	Description     string // Human-readable description
-}
-
-// GetSecurityAudit returns security information about signature operations
-func GetSecurityAudit() *SecurityAudit {
-	return &SecurityAudit{
-		ConstantTimeOps: true,
-		TimingResistant: true,
-		Description: "Signature operations use constant-time comparisons where possible. " +
-			"Public key comparisons use subtle.ConstantTimeCompare. " +
-			"Signature verification uses timing-resistant operations from btcec/v2. " +
-			"All inputs are validated to prevent exploitation.",
-	}
-}
-
-// ZeroBytes securely zeros a byte slice to prevent key material from lingering in memory
-// This is a best-effort approach as Go's garbage collector may have made copies
+// ZeroBytes securely zeros out a byte slice (for sensitive data like private keys)
 func ZeroBytes(b []byte) {
-	if b == nil {
-		return
-	}
 	for i := range b {
 		b[i] = 0
 	}
-}
-
-// SecureSigningContext holds context for secure signing operations
-type SecureSigningContext struct {
-	AdditionalEntropy []byte // Additional entropy for nonce generation
-	Timestamp         int64  // Timestamp for signature validity
-	Metadata          []byte // Additional metadata to include in signature
-}
-
-// SignWithContext signs data with additional context for enhanced security
-// The context is included in the hash computation
-func SignWithContext(data []byte, privKey *btcec.PrivateKey, ctx *SecureSigningContext) ([]byte, error) {
-	if err := validateSigningInputs(data, privKey); err != nil {
-		return nil, fmt.Errorf("input validation failed: %w", err)
-	}
-
-	if ctx == nil {
-		// If no context provided, use standard signing
-		return SignCompact(data, privKey)
-	}
-
-	// Combine data with context
-	combinedData := make([]byte, 0, len(data)+len(ctx.AdditionalEntropy)+8+len(ctx.Metadata))
-	combinedData = append(combinedData, data...)
-	
-	if ctx.AdditionalEntropy != nil {
-		combinedData = append(combinedData, ctx.AdditionalEntropy...)
-	}
-	
-	if ctx.Timestamp > 0 {
-		tsBytes := make([]byte, 8)
-		for i := uint(0); i < 8; i++ {
-			tsBytes[7-i] = byte(ctx.Timestamp >> (i * 8))
-		}
-		combinedData = append(combinedData, tsBytes...)
-	}
-	
-	if ctx.Metadata != nil {
-		combinedData = append(combinedData, ctx.Metadata...)
-	}
-
-	return SignCompact(combinedData, privKey)
-}
-
-// VerifyWithContext verifies a signature created with context
-func VerifyWithContext(data []byte, signature []byte, pubKey *btcec.PublicKey, ctx *SecureSigningContext) (bool, error) {
-	if ctx == nil {
-		return VerifyCompact(data, signature, pubKey)
-	}
-
-	// Reconstruct combined data
-	combinedData := make([]byte, 0, len(data)+len(ctx.AdditionalEntropy)+8+len(ctx.Metadata))
-	combinedData = append(combinedData, data...)
-	
-	if ctx.AdditionalEntropy != nil {
-		combinedData = append(combinedData, ctx.AdditionalEntropy...)
-	}
-	
-	if ctx.Timestamp > 0 {
-		tsBytes := make([]byte, 8)
-		for i := uint(0); i < 8; i++ {
-			tsBytes[7-i] = byte(ctx.Timestamp >> (i * 8))
-		}
-		combinedData = append(combinedData, tsBytes...)
-	}
-	
-	if ctx.Metadata != nil {
-		combinedData = append(combinedData, ctx.Metadata...)
-	}
-
-	return VerifyCompact(combinedData, signature, pubKey)
 }

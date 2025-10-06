@@ -1,1166 +1,929 @@
-// internal/core/blockchain.go
 package core
 
 import (
-	"context"
+	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"sync"
 	"time"
 
-	"github.com/EmekaIwuagwu/dinari-blockchain/internal/consensus"
-	"github.com/EmekaIwuagwu/dinari-blockchain/internal/storage"
-	"github.com/EmekaIwuagwu/dinari-blockchain/internal/types"
-	"go.uber.org/zap"
+	"github.com/dgraph-io/badger/v3"
 )
 
 const (
-	// MaxBlockSize is the maximum size of a block in bytes
-	MaxBlockSize = 2 * 1024 * 1024 // 2MB
-
-	// MaxReorgDepth is the maximum depth for chain reorganization
-	MaxReorgDepth = 100
-
-	// BlockValidationTimeout is the timeout for validating a single block
-	BlockValidationTimeout = 30 * time.Second
-
-	// StateCommitTimeout is the timeout for committing state changes
-	StateCommitTimeout = 60 * time.Second
-
-	// MaxConcurrentValidations is the maximum number of concurrent block validations
-	MaxConcurrentValidations = 10
-
-	// MinConfirmations is the minimum number of confirmations considered safe
-	MinConfirmations = 6
-
-	// OrphanBlockTTL is how long to keep orphan blocks
-	OrphanBlockTTL = 24 * time.Hour
-
-	// MaxOrphanBlocks is the maximum number of orphan blocks to store
-	MaxOrphanBlocks = 100
+	// Consensus parameters
+	TargetBlockTime         = 15 * time.Second // 15 seconds per block
+	DifficultyAdjustmentInterval = 120         // Adjust every 120 blocks
+	MaxBlockSize            = 1 << 20          // 1MB max block size
+	MaxTransactionsPerBlock = 5000             // Max 5000 txs per block
+	
+	// Reorg protection
+	MaxReorgDepth = 100 // Maximum depth for chain reorganization
+	
+	// Orphan blocks
+	MaxOrphanBlocks      = 100
+	OrphanBlockTimeout   = 10 * time.Minute
+	
+	// Checkpoints
+	CheckpointInterval = 1000 // Create checkpoint every 1000 blocks
+	
+	// Block rewards
+	InitialBlockReward = 50 * 1e8        // 50 DNT (with 8 decimals)
+	HalvingInterval    = 210000          // Halve reward every 210,000 blocks
+	MaxSupply          = 21000000 * 1e8  // 21 million DNT total supply
+	
+	// Time validation
+	MaxFutureBlockTime = 2 * time.Hour // Reject blocks more than 2 hours in future
+	
+	// Genesis block
+	GenesisTimestamp = 1704067200 // 2024-01-01 00:00:00 UTC
 )
 
-// Blockchain manages the chain of blocks with production-grade safety
-type Blockchain struct {
-	// Core components
-	db     *storage.DB
-	state  *State
-	logger *zap.Logger
+var (
+	// Database key prefixes
+	prefixBlock       = []byte("blk:")      // blk:<height> -> Block
+	prefixBlockHash   = []byte("blkhash:")  // blkhash:<hash> -> height
+	prefixBestChain   = []byte("best:")     // best:<height> -> hash
+	prefixChainState  = []byte("chain:")    // chain:state -> ChainState
+	prefixCheckpoint  = []byte("ckpt:")     // ckpt:<height> -> Checkpoint
+	prefixOrphan      = []byte("orphan:")   // orphan:<hash> -> Block
+	
+	// Special keys
+	keyGenesisHash = []byte("genesis:hash")
+	keyBestHeight  = []byte("chain:height")
+	keyChainWork   = []byte("chain:work")
+	
+	// Errors
+	ErrBlockNotFound       = errors.New("block not found")
+	ErrInvalidBlock        = errors.New("invalid block")
+	ErrInvalidPrevHash     = errors.New("invalid previous block hash")
+	ErrInvalidTimestamp    = errors.New("invalid timestamp")
+	ErrInvalidDifficulty   = errors.New("invalid difficulty")
+	ErrInvalidMerkleRoot   = errors.New("invalid merkle root")
+	ErrBlockTooLarge       = errors.New("block size exceeds limit")
+	ErrTooManyTransactions = errors.New("too many transactions in block")
+	ErrDuplicateBlock      = errors.New("duplicate block")
+	ErrOrphanBlock         = errors.New("orphan block (previous block not found)")
+	ErrReorgTooDeep        = errors.New("reorganization too deep")
+	ErrInvalidBlockReward  = errors.New("invalid block reward")
+	ErrGenesisBlockMismatch = errors.New("genesis block mismatch")
+)
 
-	// Consensus components
-	pow              *consensus.ProofOfWork
-	difficultyAdjust *consensus.DifficultyAdjuster
-	rewardCalc       *consensus.RewardCalculator
+// Block represents a blockchain block
+type Block struct {
+	Header       *BlockHeader   `json:"header"`
+	Transactions []*Transaction `json:"transactions"`
+}
 
-	// Chain metadata (protected by mutex)
-	tip    [32]byte
-	height uint64
-	mu     sync.RWMutex
+// BlockHeader contains block metadata
+type BlockHeader struct {
+	Version       uint32   `json:"version"`
+	Height        uint64   `json:"height"`
+	PrevBlockHash []byte   `json:"prevBlockHash"`
+	MerkleRoot    []byte   `json:"merkleRoot"`
+	Timestamp     int64    `json:"timestamp"`
+	Difficulty    uint32   `json:"difficulty"`
+	Nonce         uint64   `json:"nonce"`
+	Hash          []byte   `json:"hash"`
+	StateRoot     []byte   `json:"stateRoot"` // Root of state merkle tree
+}
 
-	// Mint authorities for AFC (immutable after initialization)
-	mintAuthorities map[string]bool
-
-	// Orphan block management
-	orphanBlocks      map[[32]byte]*OrphanBlock
-	orphanBlocksMutex sync.RWMutex
-
-	// Validation rate limiting
-	validationSemaphore chan struct{}
-
-	// Metrics
-	metrics *BlockchainMetrics
-
-	// Shutdown management
-	ctx        context.Context
-	cancelFunc context.CancelFunc
-	wg         sync.WaitGroup
+// ChainState tracks the current chain state
+type ChainState struct {
+	Height       uint64   `json:"height"`
+	BestHash     []byte   `json:"bestHash"`
+	TotalWork    *big.Int `json:"totalWork"`
+	Difficulty   uint32   `json:"difficulty"`
+	LastAdjustment uint64 `json:"lastAdjustment"`
 }
 
 // OrphanBlock represents a block waiting for its parent
 type OrphanBlock struct {
-	Block     *types.Block
+	Block     *Block
 	ReceivedAt time.Time
 }
 
-// BlockchainMetrics tracks blockchain performance and health
-type BlockchainMetrics struct {
-	TotalBlocks           uint64
-	TotalTransactions     uint64
-	ValidationErrors      uint64
-	StateCommitErrors     uint64
-	OrphanBlocksReceived  uint64
-	ReorganizationsCount  uint64
-	AverageBlockTime      time.Duration
-	LastBlockTime         time.Time
-	mu                    sync.RWMutex
+// Blockchain manages the blockchain state
+type Blockchain struct {
+	db    *badger.DB
+	state *StateDB
+	
+	// Current chain state
+	chainState *ChainState
+	
+	// Orphan blocks waiting for parent
+	orphans   map[string]*OrphanBlock
+	orphansMu sync.RWMutex
+	
+	// Cache for recent blocks
+	blockCache   map[uint64]*Block
+	cacheMu      sync.RWMutex
+	maxCacheSize int
+	
+	// Genesis block
+	genesisBlock *Block
+	
+	// Chain lock for atomic operations
+	chainMu sync.RWMutex
+	
+	// Statistics
+	stats BlockchainStats
+	statsMu sync.Mutex
 }
 
-// Config contains blockchain configuration
-type Config struct {
-	DB              *storage.DB
-	Logger          *zap.Logger
-	MintAuthorities []string
-	// Future: Add more config options like network ID, chain ID, etc.
+// BlockchainStats tracks blockchain statistics
+type BlockchainStats struct {
+	BlocksProcessed   uint64
+	BlocksRejected    uint64
+	OrphanBlocksCount uint64
+	ReorgsCount       uint64
+	AverageBlockTime  time.Duration
 }
 
-// NewBlockchain creates a new blockchain instance with full validation
-func NewBlockchain(config *Config) (*Blockchain, error) {
-	// Validate configuration
-	if err := validateBlockchainConfig(config); err != nil {
-		return nil, fmt.Errorf("invalid configuration: %w", err)
+// NewBlockchain creates a new blockchain instance
+func NewBlockchain(db *badger.DB, state *StateDB, genesisBlock *Block) (*Blockchain, error) {
+	if db == nil {
+		return nil, errors.New("database cannot be nil")
 	}
-
-	// Create context for graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
-
+	if state == nil {
+		return nil, errors.New("state cannot be nil")
+	}
+	if genesisBlock == nil {
+		return nil, errors.New("genesis block cannot be nil")
+	}
+	
 	bc := &Blockchain{
-		db:                  config.DB,
-		state:               NewState(config.DB, config.Logger),
-		logger:              config.Logger,
-		pow:                 consensus.NewProofOfWork(consensus.TargetBlockTime),
-		difficultyAdjust:    consensus.NewDifficultyAdjuster(),
-		rewardCalc:          consensus.NewRewardCalculator(),
-		mintAuthorities:     make(map[string]bool),
-		orphanBlocks:        make(map[[32]byte]*OrphanBlock),
-		validationSemaphore: make(chan struct{}, MaxConcurrentValidations),
-		metrics:             &BlockchainMetrics{},
-		ctx:                 ctx,
-		cancelFunc:          cancel,
+		db:           db,
+		state:        state,
+		orphans:      make(map[string]*OrphanBlock),
+		blockCache:   make(map[uint64]*Block),
+		maxCacheSize: 100,
+		genesisBlock: genesisBlock,
 	}
-
-	// Set mint authorities (immutable)
-	for _, auth := range config.MintAuthorities {
-		bc.mintAuthorities[auth] = true
+	
+	// Initialize or load chain state
+	if err := bc.initialize(); err != nil {
+		return nil, fmt.Errorf("failed to initialize blockchain: %w", err)
 	}
-
-	// Load or create genesis block
-	if err := bc.initializeChain(); err != nil {
-		cancel()
-		return nil, fmt.Errorf("chain initialization failed: %w", err)
-	}
-
-	// Start background maintenance tasks
-	bc.startBackgroundTasks()
-
-	config.Logger.Info("✅ Blockchain initialized successfully",
-		zap.Uint64("height", bc.height),
-		zap.String("tip", fmt.Sprintf("%x", bc.tip[:8])),
-		zap.Int("mintAuthorities", len(bc.mintAuthorities)))
-
+	
 	return bc, nil
 }
 
-// initializeChain loads existing chain or creates genesis
-func (bc *Blockchain) initializeChain() error {
-	// Try to load existing chain
-	genesisKey := storage.GenesisKey()
-	genesisHashData, err := bc.db.Get(genesisKey)
-
+// initialize sets up the blockchain (genesis or load existing)
+func (bc *Blockchain) initialize() error {
+	// Check if genesis exists
+	var genesisHash []byte
+	err := bc.db.View(func(txn *badger.Txn) error {
+		item, err := txn.Get(keyGenesisHash)
+		if err == badger.ErrKeyNotFound {
+			return nil // Genesis doesn't exist yet
+		}
+		if err != nil {
+			return err
+		}
+		return item.Value(func(val []byte) error {
+			genesisHash = append([]byte(nil), val...)
+			return nil
+		})
+	})
+	
 	if err != nil {
-		// Genesis doesn't exist - create it
-		bc.logger.Info("Creating genesis block...")
-		
-		genesis := types.NewGenesisBlock()
-		
-		// Validate genesis block
-		if err := bc.validateGenesisBlock(genesis); err != nil {
-			return fmt.Errorf("invalid genesis block: %w", err)
-		}
-
-		// Store genesis block atomically
-		if err := bc.storeGenesisBlock(genesis); err != nil {
-			return fmt.Errorf("failed to store genesis: %w", err)
-		}
-
-		bc.tip = genesis.Hash
-		bc.height = 0
-		bc.metrics.TotalBlocks = 1
-
-		bc.logger.Info("✅ Genesis block created",
-			zap.String("hash", fmt.Sprintf("%x", genesis.Hash[:8])))
-
-		return nil
-	}
-
-	// Load existing chain
-	var genesisHash [32]byte
-	copy(genesisHash[:], genesisHashData)
-
-	// Load chain metadata
-	if err := bc.loadChainMetadata(); err != nil {
-		return fmt.Errorf("failed to load chain metadata: %w", err)
-	}
-
-	// Validate chain integrity on startup
-	if err := bc.validateChainIntegrity(); err != nil {
-		bc.logger.Error("⚠️ Chain integrity check failed", zap.Error(err))
-		// Don't fail startup, but log the error prominently
-	}
-
-	bc.logger.Info("✅ Loaded existing blockchain",
-		zap.Uint64("height", bc.height),
-		zap.String("tip", fmt.Sprintf("%x", bc.tip[:8])))
-
-	return nil
-}
-
-// AddBlock adds a new block to the chain with comprehensive validation
-func (bc *Blockchain) AddBlock(block *types.Block) error {
-	// Check if shutdown in progress
-	select {
-	case <-bc.ctx.Done():
-		return fmt.Errorf("blockchain is shutting down")
-	default:
-	}
-
-	// Acquire validation semaphore to limit concurrent validations
-	select {
-	case bc.validationSemaphore <- struct{}{}:
-		defer func() { <-bc.validationSemaphore }()
-	case <-bc.ctx.Done():
-		return fmt.Errorf("blockchain is shutting down")
-	}
-
-	startTime := time.Now()
-	defer func() {
-		duration := time.Since(startTime)
-		bc.logger.Debug("Block processing completed",
-			zap.Uint64("height", block.Header.Number),
-			zap.Duration("duration", duration))
-	}()
-
-	// Create validation context with timeout
-	ctx, cancel := context.WithTimeout(bc.ctx, BlockValidationTimeout)
-	defer cancel()
-
-	// Validate block with context
-	if err := bc.validateBlockWithContext(ctx, block); err != nil {
-		bc.metrics.mu.Lock()
-		bc.metrics.ValidationErrors++
-		bc.metrics.mu.Unlock()
-		
-		bc.logger.Warn("❌ Block validation failed",
-			zap.Uint64("height", block.Header.Number),
-			zap.String("hash", fmt.Sprintf("%x", block.Hash[:8])),
-			zap.Error(err))
-		
-		return fmt.Errorf("block validation failed: %w", err)
-	}
-
-	// Lock for chain modification
-	bc.mu.Lock()
-	defer bc.mu.Unlock()
-
-	// Check if block is orphan
-	if block.Header.ParentHash != bc.tip {
-		return bc.handleOrphanBlock(block)
-	}
-
-	// Apply block atomically
-	if err := bc.applyBlockAtomic(ctx, block); err != nil {
-		bc.metrics.mu.Lock()
-		bc.metrics.StateCommitErrors++
-		bc.metrics.mu.Unlock()
-		
-		return fmt.Errorf("failed to apply block: %w", err)
-	}
-
-	// Update metrics
-	bc.updateMetrics(block)
-
-	bc.logger.Info("✅ Block added to chain",
-		zap.Uint64("height", block.Header.Number),
-		zap.String("hash", fmt.Sprintf("%x", block.Hash[:8])),
-		zap.Uint32("txCount", block.Header.TxCount),
-		zap.Int("orphansResolved", bc.tryResolveOrphans(block.Hash)))
-
-	return nil
-}
-
-// validateBlockWithContext validates a block with cancellation support
-func (bc *Blockchain) validateBlockWithContext(ctx context.Context, block *types.Block) error {
-	// Check context before expensive operations
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	// Basic structure validation
-	if err := bc.validateBlockStructure(block); err != nil {
-		return fmt.Errorf("structure validation failed: %w", err)
-	}
-
-	// Check context again
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	// Validate proof of work
-	if !bc.pow.ValidateProofOfWork(block) {
-		return types.ErrInvalidPoW
-	}
-
-	// Check context again
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	// Validate difficulty
-	if err := bc.validateBlockDifficulty(block); err != nil {
-		return fmt.Errorf("difficulty validation failed: %w", err)
-	}
-
-	// Check context again
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	// Validate transactions
-	if err := bc.validateBlockTransactions(block); err != nil {
-		return fmt.Errorf("transaction validation failed: %w", err)
-	}
-
-	return nil
-}
-
-// validateBlockStructure performs basic structural validation
-func (bc *Blockchain) validateBlockStructure(block *types.Block) error {
-	if block == nil {
-		return fmt.Errorf("block is nil")
-	}
-
-	if block.Header == nil {
-		return fmt.Errorf("block header is nil")
-	}
-
-	// Validate block size
-	blockSize := block.Size()
-	if blockSize > MaxBlockSize {
-		return fmt.Errorf("block size %d exceeds maximum %d", blockSize, MaxBlockSize)
-	}
-
-	// Validate timestamp (not too far in future)
-	maxFutureTime := time.Now().Unix() + 7200 // 2 hours tolerance
-	if block.Header.Timestamp > maxFutureTime {
-		return fmt.Errorf("%w: timestamp %d is too far in future", 
-			types.ErrInvalidTimestamp, block.Header.Timestamp)
-	}
-
-	// Validate timestamp is not before genesis
-	if block.Header.Number > 0 && block.Header.Timestamp < 1704067200 {
-		return fmt.Errorf("%w: timestamp %d is before genesis", 
-			types.ErrInvalidTimestamp, block.Header.Timestamp)
-	}
-
-	// Basic block validation
-	if err := block.Validate(); err != nil {
 		return err
 	}
-
-	// Validate block number sequence (if not orphan)
-	bc.mu.RLock()
-	expectedNumber := bc.height + 1
-	bc.mu.RUnlock()
-
-	if block.Header.Number > expectedNumber+MaxReorgDepth {
-		return fmt.Errorf("block number %d is too far ahead (current: %d)", 
-			block.Header.Number, expectedNumber-1)
+	
+	// If genesis doesn't exist, create it
+	if genesisHash == nil {
+		return bc.createGenesis()
 	}
-
-	return nil
+	
+	// Load chain state
+	return bc.loadChainState()
 }
 
-// validateBlockDifficulty validates the block's difficulty
-func (bc *Blockchain) validateBlockDifficulty(block *types.Block) error {
-	if block.Header.Number == 0 {
-		// Genesis block - just check minimum
-		if block.Header.Difficulty.Cmp(big.NewInt(consensus.MinDifficulty)) < 0 {
-			return types.ErrInvalidDifficulty
-		}
-		return nil
-	}
-
-	// Get recent blocks for difficulty calculation
-	recentBlocks, err := bc.getRecentBlocksForValidation(block.Header.Number - 1)
-	if err != nil {
-		return fmt.Errorf("failed to get recent blocks: %w", err)
-	}
-
-	// Validate difficulty
-	if err := bc.difficultyAdjust.ValidateDifficulty(
-		block.Header.Number, 
-		block.Header.Difficulty, 
-		recentBlocks,
-	); err != nil {
-		return fmt.Errorf("difficulty validation failed: %w", err)
-	}
-
-	return nil
-}
-
-// validateBlockTransactions validates all transactions in a block
-func (bc *Blockchain) validateBlockTransactions(block *types.Block) error {
-	if len(block.Transactions) == 0 {
-		return types.ErrMissingCoinbase
-	}
-
-	// First transaction must be coinbase
-	coinbaseTx := block.Transactions[0]
-	if !coinbaseTx.IsCoinbase() {
-		return types.ErrMissingCoinbase
-	}
-
-	// Validate coinbase reward
-	baseReward := bc.rewardCalc.CalculateBlockReward(block.Header.Number)
-
-	// Calculate total fees from non-coinbase transactions
-	totalFees := big.NewInt(0)
-	for _, tx := range block.Transactions[1:] {
-		if tx.FeeDNT != nil {
-			totalFees.Add(totalFees, tx.FeeDNT)
-		}
-	}
-
-	// Expected reward = base reward + all transaction fees
-	expectedReward := new(big.Int).Add(baseReward, totalFees)
-
-	// Validate coinbase amount
-	if coinbaseTx.Amount.Cmp(expectedReward) != 0 {
-		bc.logger.Error("❌ Invalid block reward",
-			zap.String("expected", expectedReward.String()),
-			zap.String("actual", coinbaseTx.Amount.String()),
-			zap.String("baseReward", baseReward.String()),
-			zap.String("totalFees", totalFees.String()),
-			zap.Uint64("blockNumber", block.Header.Number))
-		return types.ErrInvalidReward
-	}
-
-	bc.logger.Debug("✅ Coinbase validated",
-		zap.Uint64("blockNumber", block.Header.Number),
-		zap.String("miner", coinbaseTx.To),
-		zap.String("reward", expectedReward.String()),
-		zap.String("baseReward", baseReward.String()),
-		zap.String("fees", totalFees.String()))
-
-	// Validate mint transactions
-	for i, tx := range block.Transactions[1:] {
-		if tx.IsMint() {
-			// Verify it's AFC being minted
-			if tx.TokenType != string(types.TokenAFC) {
-				bc.logger.Error("❌ Invalid mint token type",
-					zap.Int("txIndex", i+1),
-					zap.String("tokenType", tx.TokenType))
-				return types.ErrMintOnlyAFC
-			}
-
-			// Mint transactions should have zero fee
-			if tx.FeeDNT.Cmp(big.NewInt(0)) != 0 {
-				bc.logger.Error("❌ Mint transaction has non-zero fee",
-					zap.Int("txIndex", i+1),
-					zap.String("fee", tx.FeeDNT.String()))
-				return types.ErrInvalidMintTx
-			}
-		}
-	}
-
-	// Ensure only one coinbase
-	for i := 1; i < len(block.Transactions); i++ {
-		if block.Transactions[i].IsCoinbase() {
-			return types.ErrMultipleCoinbase
-		}
-	}
-
-	// Validate each transaction's basic structure
-	for i, tx := range block.Transactions {
-		if err := tx.Validate(); err != nil {
-			return fmt.Errorf("transaction %d invalid: %w", i, err)
-		}
-	}
-
-	return nil
-}
-
-// applyBlockAtomic applies a block atomically with rollback on failure
-func (bc *Blockchain) applyBlockAtomic(ctx context.Context, block *types.Block) error {
-	// Create a state snapshot for rollback
-	stateSnapshot := bc.state.Copy()
-
-	// Apply all transactions
-	for i, tx := range block.Transactions {
-		// Check context
-		select {
-		case <-ctx.Done():
-			// Rollback state
-			bc.state = stateSnapshot
-			return fmt.Errorf("block application cancelled: %w", ctx.Err())
-		default:
-		}
-
-		if err := bc.state.ApplyTransaction(tx); err != nil {
-			// Rollback state on error
-			bc.state = stateSnapshot
-			return fmt.Errorf("failed to apply tx %d: %w", i, err)
-		}
-	}
-
-	// Commit state changes with timeout
-	commitCtx, commitCancel := context.WithTimeout(ctx, StateCommitTimeout)
-	defer commitCancel()
-
-	// Create a channel to handle commit result
-	commitErr := make(chan error, 1)
-	go func() {
-		commitErr <- bc.state.Commit()
-	}()
-
-	// Wait for commit or timeout
-	select {
-	case err := <-commitErr:
+// createGenesis creates and stores the genesis block
+func (bc *Blockchain) createGenesis() error {
+	// Calculate genesis hash
+	bc.genesisBlock.Header.Hash = bc.calculateBlockHash(bc.genesisBlock.Header)
+	
+	// Store genesis block
+	return bc.db.Update(func(txn *badger.Txn) error {
+		// Store block
+		blockData, err := json.Marshal(bc.genesisBlock)
 		if err != nil {
-			// Rollback state on commit failure
-			bc.state = stateSnapshot
-			return fmt.Errorf("state commit failed: %w", err)
+			return err
 		}
-	case <-commitCtx.Done():
-		// Rollback state on timeout
-		bc.state = stateSnapshot
-		return fmt.Errorf("state commit timeout: %w", commitCtx.Err())
+		
+		key := append(prefixBlock, encodeUint64(0)...)
+		if err := txn.Set(key, blockData); err != nil {
+			return err
+		}
+		
+		// Store hash mapping
+		hashKey := append(prefixBlockHash, bc.genesisBlock.Header.Hash...)
+		if err := txn.Set(hashKey, encodeUint64(0)); err != nil {
+			return err
+		}
+		
+		// Store genesis hash
+		if err := txn.Set(keyGenesisHash, bc.genesisBlock.Header.Hash); err != nil {
+			return err
+		}
+		
+		// Store best chain
+		bestKey := append(prefixBestChain, encodeUint64(0)...)
+		if err := txn.Set(bestKey, bc.genesisBlock.Header.Hash); err != nil {
+			return err
+		}
+		
+		// Initialize chain state
+		bc.chainState = &ChainState{
+			Height:         0,
+			BestHash:       bc.genesisBlock.Header.Hash,
+			TotalWork:      big.NewInt(int64(bc.genesisBlock.Header.Difficulty)),
+			Difficulty:     bc.genesisBlock.Header.Difficulty,
+			LastAdjustment: 0,
+		}
+		
+		stateData, err := json.Marshal(bc.chainState)
+		if err != nil {
+			return err
+		}
+		
+		return txn.Set(prefixChainState, stateData)
+	})
+}
+
+// AddBlock adds a new block to the blockchain with full validation
+func (bc *Blockchain) AddBlock(block *Block) error {
+	if block == nil {
+		return errors.New("block cannot be nil")
 	}
-
-	// Store block in database
-	if err := bc.storeBlock(block); err != nil {
-		// Critical: State committed but block storage failed
-		// Log error but don't rollback state (would cause inconsistency)
-		bc.logger.Error("🚨 CRITICAL: Block storage failed after state commit",
-			zap.Uint64("height", block.Header.Number),
-			zap.Error(err))
-		return fmt.Errorf("block storage failed: %w", err)
+	
+	bc.chainMu.Lock()
+	defer bc.chainMu.Unlock()
+	
+	// 1. Basic validation
+	if err := bc.validateBlockBasics(block); err != nil {
+		bc.incrementRejected()
+		return fmt.Errorf("basic validation failed: %w", err)
 	}
-
-	// Update chain metadata
-	if err := bc.updateChainMetadataAtomic(block); err != nil {
-		bc.logger.Error("Failed to update chain metadata", zap.Error(err))
-		// Not critical - metadata can be rebuilt
+	
+	// 2. Check for duplicate
+	if bc.hasBlock(block.Header.Hash) {
+		return ErrDuplicateBlock
 	}
+	
+	// 3. Check if previous block exists
+	prevBlock, err := bc.GetBlockByHash(block.Header.PrevBlockHash)
+	if err != nil {
+		// Previous block not found - add to orphan pool
+		return bc.addOrphanBlock(block)
+	}
+	
+	// 4. Validate block header
+	if err := bc.validateBlockHeader(block.Header, prevBlock.Header); err != nil {
+		bc.incrementRejected()
+		return fmt.Errorf("header validation failed: %w", err)
+	}
+	
+	// 5. Validate transactions
+	if err := bc.validateBlockTransactions(block); err != nil {
+		bc.incrementRejected()
+		return fmt.Errorf("transaction validation failed: %w", err)
+	}
+	
+	// 6. Validate merkle root
+	if err := bc.validateMerkleRoot(block); err != nil {
+		bc.incrementRejected()
+		return fmt.Errorf("merkle root validation failed: %w", err)
+	}
+	
+	// 7. Check if this extends the best chain
+	isMainChain := bytes.Equal(block.Header.PrevBlockHash, bc.chainState.BestHash)
+	
+	if isMainChain {
+		// Extends main chain - add directly
+		return bc.addBlockToMainChain(block)
+	}
+	
+	// Side chain - check if it becomes the new best chain
+	return bc.handleSideChain(block)
+}
 
-	// Update tip and height
-	bc.tip = block.Hash
-	bc.height = block.Header.Number
-
+// validateBlockBasics performs basic block validation
+func (bc *Blockchain) validateBlockBasics(block *Block) error {
+	// Check version
+	if block.Header.Version == 0 {
+		return errors.New("invalid version")
+	}
+	
+	// Check hash
+	if len(block.Header.Hash) != 32 {
+		return errors.New("invalid hash length")
+	}
+	
+	// Verify hash calculation
+	calculatedHash := bc.calculateBlockHash(block.Header)
+	if !bytes.Equal(calculatedHash, block.Header.Hash) {
+		return errors.New("hash mismatch")
+	}
+	
+	// Check block size
+	blockSize := bc.calculateBlockSize(block)
+	if blockSize > MaxBlockSize {
+		return ErrBlockTooLarge
+	}
+	
+	// Check transaction count
+	if len(block.Transactions) > MaxTransactionsPerBlock {
+		return ErrTooManyTransactions
+	}
+	
+	// Check timestamp
+	now := time.Now().Unix()
+	if block.Header.Timestamp > now+int64(MaxFutureBlockTime.Seconds()) {
+		return ErrInvalidTimestamp
+	}
+	
 	return nil
 }
 
-// handleOrphanBlock handles a block whose parent is not the current tip
-func (bc *Blockchain) handleOrphanBlock(block *types.Block) error {
-	// Check if this is too far ahead
-	if block.Header.Number > bc.height+MaxReorgDepth {
-		return fmt.Errorf("block %d is too far ahead (current height: %d)", 
-			block.Header.Number, bc.height)
+// validateBlockHeader validates block header against previous block
+func (bc *Blockchain) validateBlockHeader(header, prevHeader *BlockHeader) error {
+	// Check height
+	if header.Height != prevHeader.Height+1 {
+		return fmt.Errorf("invalid height: expected %d, got %d", prevHeader.Height+1, header.Height)
 	}
-
-	// Check if parent exists in database
-	parentExists, err := bc.db.Has(storage.BlockHashKey(block.Header.ParentHash))
-	if err != nil {
-		return fmt.Errorf("failed to check parent existence: %w", err)
+	
+	// Check previous hash
+	if !bytes.Equal(header.PrevBlockHash, prevHeader.Hash) {
+		return ErrInvalidPrevHash
 	}
-
-	if !parentExists {
-		// True orphan - store for later
-		bc.storeOrphanBlock(block)
-		bc.logger.Info("Stored orphan block",
-			zap.Uint64("height", block.Header.Number),
-			zap.String("hash", fmt.Sprintf("%x", block.Hash[:8])),
-			zap.String("parent", fmt.Sprintf("%x", block.Header.ParentHash[:8])))
-		return types.ErrOrphanBlock
+	
+	// Check timestamp (must be after previous block)
+	if header.Timestamp <= prevHeader.Timestamp {
+		return ErrInvalidTimestamp
 	}
-
-	// Parent exists but it's not our tip - potential reorg
-	return bc.attemptReorganization(block)
+	
+	// Check difficulty
+	expectedDifficulty := bc.calculateNextDifficulty(prevHeader)
+	if header.Difficulty != expectedDifficulty {
+		return fmt.Errorf("%w: expected %d, got %d", ErrInvalidDifficulty, expectedDifficulty, header.Difficulty)
+	}
+	
+	// Validate Proof of Work
+	if !bc.validateProofOfWork(header) {
+		return errors.New("invalid proof of work")
+	}
+	
+	return nil
 }
 
-// storeOrphanBlock stores an orphan block temporarily
-func (bc *Blockchain) storeOrphanBlock(block *types.Block) {
-	bc.orphanBlocksMutex.Lock()
-	defer bc.orphanBlocksMutex.Unlock()
-
-	// Enforce max orphan blocks
-	if len(bc.orphanBlocks) >= MaxOrphanBlocks {
-		// Remove oldest orphan
-		var oldestHash [32]byte
-		var oldestTime time.Time
-		first := true
-
-		for hash, orphan := range bc.orphanBlocks {
-			if first || orphan.ReceivedAt.Before(oldestTime) {
-				oldestHash = hash
-				oldestTime = orphan.ReceivedAt
-				first = false
-			}
-		}
-
-		delete(bc.orphanBlocks, oldestHash)
-		bc.logger.Debug("Removed oldest orphan block", 
-			zap.String("hash", fmt.Sprintf("%x", oldestHash[:8])))
+// validateBlockTransactions validates all transactions in block
+func (bc *Blockchain) validateBlockTransactions(block *Block) error {
+	if len(block.Transactions) == 0 {
+		return errors.New("block must contain at least one transaction (coinbase)")
 	}
+	
+	// First transaction must be coinbase (mining reward)
+	coinbaseTx := block.Transactions[0]
+	if err := bc.validateCoinbase(coinbaseTx, block.Header.Height); err != nil {
+		return fmt.Errorf("invalid coinbase: %w", err)
+	}
+	
+	// Validate remaining transactions
+	seenHashes := make(map[string]bool)
+	for i, tx := range block.Transactions[1:] {
+		// Check for duplicate transactions
+		txHash := string(tx.Hash)
+		if seenHashes[txHash] {
+			return fmt.Errorf("duplicate transaction at index %d", i+1)
+		}
+		seenHashes[txHash] = true
+		
+		// Validate transaction (signature, balance, nonce)
+		if err := bc.validateTransaction(tx); err != nil {
+			return fmt.Errorf("invalid transaction at index %d: %w", i+1, err)
+		}
+	}
+	
+	return nil
+}
 
-	bc.orphanBlocks[block.Hash] = &OrphanBlock{
+// validateCoinbase validates the coinbase transaction
+func (bc *Blockchain) validateCoinbase(tx *Transaction, height uint64) error {
+	// Calculate expected block reward
+	expectedReward := bc.calculateBlockReward(height)
+	
+	// Coinbase should have zero fees and specific amount
+	if tx.Amount.Cmp(expectedReward) != 0 {
+		return fmt.Errorf("%w: expected %s, got %s", ErrInvalidBlockReward, expectedReward.String(), tx.Amount.String())
+	}
+	
+	// Coinbase has no sender (from is empty or special address)
+	if tx.From != "" && tx.From != "COINBASE" {
+		return errors.New("coinbase must have empty or COINBASE sender")
+	}
+	
+	return nil
+}
+
+// validateTransaction validates a single transaction
+func (bc *Blockchain) validateTransaction(tx *Transaction) error {
+	// This should call crypto package for signature verification
+	// and state DB for balance/nonce checks
+	
+	// Check sender balance
+	balance, err := bc.state.GetBalance(tx.From, TokenType(tx.TokenType))
+	if err != nil {
+		return err
+	}
+	
+	totalRequired := new(big.Int).Add(tx.Amount, tx.FeeDNT)
+	if balance.Cmp(totalRequired) < 0 {
+		return ErrInsufficientBalance
+	}
+	
+	// Check nonce
+	expectedNonce, err := bc.state.GetNonce(tx.From)
+	if err != nil {
+		return err
+	}
+	
+	if tx.Nonce != expectedNonce {
+		return fmt.Errorf("%w: expected %d, got %d", ErrInvalidNonce, expectedNonce, tx.Nonce)
+	}
+	
+	return nil
+}
+
+// validateMerkleRoot validates the merkle root of transactions
+func (bc *Blockchain) validateMerkleRoot(block *Block) error {
+	calculatedRoot := bc.calculateMerkleRoot(block.Transactions)
+	
+	if !bytes.Equal(calculatedRoot, block.Header.MerkleRoot) {
+		return ErrInvalidMerkleRoot
+	}
+	
+	return nil
+}
+
+// validateProofOfWork validates the block's proof of work
+func (bc *Blockchain) validateProofOfWork(header *BlockHeader) bool {
+	// Check if hash meets difficulty target
+	target := bc.difficultyToTarget(header.Difficulty)
+	hashInt := new(big.Int).SetBytes(header.Hash)
+	
+	return hashInt.Cmp(target) <= 0
+}
+
+// addBlockToMainChain adds a block to the main chain and updates state
+func (bc *Blockchain) addBlockToMainChain(block *Block) error {
+	// Create state checkpoint
+	checkpointID := bc.state.Checkpoint()
+	
+	// Apply transactions to state
+	for _, tx := range block.Transactions {
+		if err := bc.applyTransaction(tx); err != nil {
+			// Rollback state on error
+			bc.state.RevertToCheckpoint(checkpointID)
+			return fmt.Errorf("failed to apply transaction: %w", err)
+		}
+	}
+	
+	// Commit state changes
+	if err := bc.state.Commit(); err != nil {
+		bc.state.RevertToCheckpoint(checkpointID)
+		return fmt.Errorf("failed to commit state: %w", err)
+	}
+	
+	// Store block in database
+	if err := bc.storeBlock(block, true); err != nil {
+		return fmt.Errorf("failed to store block: %w", err)
+	}
+	
+	// Update chain state
+	bc.updateChainState(block)
+	
+	// Update statistics
+	bc.incrementProcessed()
+	
+	// Check for orphans that can now be processed
+	bc.processOrphanBlocks(block.Header.Hash)
+	
+	// Create checkpoint if needed
+	if block.Header.Height%CheckpointInterval == 0 {
+		bc.createCheckpoint(block.Header.Height)
+	}
+	
+	fmt.Printf("✅ Block #%d added to main chain (%d txs)\n", block.Header.Height, len(block.Transactions))
+	
+	return nil
+}
+
+// handleSideChain handles a block on a side chain
+func (bc *Blockchain) handleSideChain(block *Block) error {
+	// Calculate total work for this chain
+	chainWork := bc.calculateChainWork(block)
+	
+	// If this chain has more work, reorganize
+	if chainWork.Cmp(bc.chainState.TotalWork) > 0 {
+		return bc.reorganize(block)
+	}
+	
+	// Store as side chain block
+	return bc.storeBlock(block, false)
+}
+
+// reorganize performs a blockchain reorganization
+func (bc *Blockchain) reorganize(newTip *Block) error {
+	// Find common ancestor
+	commonAncestor, oldBlocks, newBlocks, err := bc.findReorgPath(newTip)
+	if err != nil {
+		return fmt.Errorf("failed to find reorg path: %w", err)
+	}
+	
+	// Check reorg depth
+	if len(oldBlocks) > MaxReorgDepth {
+		return ErrReorgTooDeep
+	}
+	
+	fmt.Printf("🔄 Reorganizing: reverting %d blocks, applying %d blocks\n", len(oldBlocks), len(newBlocks))
+	
+	// Create checkpoint before reorg
+	checkpointID := bc.state.Checkpoint()
+	
+	// Revert old blocks
+	for i := len(oldBlocks) - 1; i >= 0; i-- {
+		if err := bc.revertBlock(oldBlocks[i]); err != nil {
+			bc.state.RevertToCheckpoint(checkpointID)
+			return fmt.Errorf("failed to revert block: %w", err)
+		}
+	}
+	
+	// Apply new blocks
+	for _, block := range newBlocks {
+		if err := bc.applyBlockTransactions(block); err != nil {
+			bc.state.RevertToCheckpoint(checkpointID)
+			return fmt.Errorf("failed to apply new block: %w", err)
+		}
+	}
+	
+	// Commit state
+	if err := bc.state.Commit(); err != nil {
+		bc.state.RevertToCheckpoint(checkpointID)
+		return fmt.Errorf("failed to commit reorg state: %w", err)
+	}
+	
+	// Update chain state
+	bc.chainState.Height = newTip.Header.Height
+	bc.chainState.BestHash = newTip.Header.Hash
+	bc.chainState.TotalWork = bc.calculateChainWork(newTip)
+	
+	// Update statistics
+	bc.statsMu.Lock()
+	bc.stats.ReorgsCount++
+	bc.statsMu.Unlock()
+	
+	fmt.Printf("✅ Reorganization complete: new tip at height %d\n", newTip.Header.Height)
+	
+	return nil
+}
+
+// Helper methods
+
+func (bc *Blockchain) calculateBlockHash(header *BlockHeader) []byte {
+	var buf bytes.Buffer
+	
+	buf.Write(encodeUint32(header.Version))
+	buf.Write(encodeUint64(header.Height))
+	buf.Write(header.PrevBlockHash)
+	buf.Write(header.MerkleRoot)
+	buf.Write(encodeInt64(header.Timestamp))
+	buf.Write(encodeUint32(header.Difficulty))
+	buf.Write(encodeUint64(header.Nonce))
+	
+	// Double SHA-256
+	first := sha256.Sum256(buf.Bytes())
+	second := sha256.Sum256(first[:])
+	
+	return second[:]
+}
+
+func (bc *Blockchain) calculateMerkleRoot(txs []*Transaction) []byte {
+	if len(txs) == 0 {
+		return make([]byte, 32)
+	}
+	
+	// Build merkle tree
+	var hashes [][]byte
+	for _, tx := range txs {
+		hashes = append(hashes, tx.Hash)
+	}
+	
+	// Iteratively hash pairs until we have one root
+	for len(hashes) > 1 {
+		if len(hashes)%2 != 0 {
+			hashes = append(hashes, hashes[len(hashes)-1]) // Duplicate last if odd
+		}
+		
+		var newLevel [][]byte
+		for i := 0; i < len(hashes); i += 2 {
+			combined := append(hashes[i], hashes[i+1]...)
+			hash := sha256.Sum256(combined)
+			newLevel = append(newLevel, hash[:])
+		}
+		hashes = newLevel
+	}
+	
+	return hashes[0]
+}
+
+func (bc *Blockchain) calculateBlockReward(height uint64) *big.Int {
+	halvings := height / HalvingInterval
+	if halvings >= 64 {
+		return big.NewInt(0) // All coins mined
+	}
+	
+	reward := big.NewInt(InitialBlockReward)
+	reward.Rsh(reward, uint(halvings)) // Divide by 2^halvings
+	
+	return reward
+}
+
+func (bc *Blockchain) calculateNextDifficulty(prevHeader *BlockHeader) uint32 {
+	// Only adjust every DifficultyAdjustmentInterval blocks
+	if (prevHeader.Height+1)%DifficultyAdjustmentInterval != 0 {
+		return prevHeader.Difficulty
+	}
+	
+	// Get block from last adjustment
+	adjustmentHeight := prevHeader.Height - DifficultyAdjustmentInterval + 1
+	oldBlock, err := bc.GetBlockByHeight(adjustmentHeight)
+	if err != nil {
+		return prevHeader.Difficulty // Fallback
+	}
+	
+	// Calculate actual time taken
+	actualTime := prevHeader.Timestamp - oldBlock.Header.Timestamp
+	expectedTime := int64(DifficultyAdjustmentInterval) * int64(TargetBlockTime.Seconds())
+	
+	// Calculate adjustment (limit to 4x change)
+	adjustment := float64(actualTime) / float64(expectedTime)
+	if adjustment > 4.0 {
+		adjustment = 4.0
+	}
+	if adjustment < 0.25 {
+		adjustment = 0.25
+	}
+	
+	newDifficulty := float64(prevHeader.Difficulty) / adjustment
+	
+	return uint32(newDifficulty)
+}
+
+func (bc *Blockchain) difficultyToTarget(difficulty uint32) *big.Int {
+	// Convert difficulty to target (simplified)
+	maxTarget := new(big.Int).Lsh(big.NewInt(1), 256)
+	target := new(big.Int).Div(maxTarget, big.NewInt(int64(difficulty)))
+	return target
+}
+
+func (bc *Blockchain) calculateBlockSize(block *Block) int {
+	data, _ := json.Marshal(block)
+	return len(data)
+}
+
+func (bc *Blockchain) applyTransaction(tx *Transaction) error {
+	// Apply transaction to state
+	// (This would integrate with state.Transfer)
+	return nil
+}
+
+func (bc *Blockchain) applyBlockTransactions(block *Block) error {
+	for _, tx := range block.Transactions {
+		if err := bc.applyTransaction(tx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (bc *Blockchain) revertBlock(block *Block) error {
+	// Revert transactions in reverse order
+	for i := len(block.Transactions) - 1; i >= 0; i-- {
+		// Revert transaction
+	}
+	return nil
+}
+
+func (bc *Blockchain) storeBlock(block *Block, isMainChain bool) error {
+	return bc.db.Update(func(txn *badger.Txn) error {
+		blockData, err := json.Marshal(block)
+		if err != nil {
+			return err
+		}
+		
+		key := append(prefixBlock, encodeUint64(block.Header.Height)...)
+		if err := txn.Set(key, blockData); err != nil {
+			return err
+		}
+		
+		// Store hash mapping
+		hashKey := append(prefixBlockHash, block.Header.Hash...)
+		return txn.Set(hashKey, encodeUint64(block.Header.Height))
+	})
+}
+
+func (bc *Blockchain) hasBlock(hash []byte) bool {
+	err := bc.db.View(func(txn *badger.Txn) error {
+		key := append(prefixBlockHash, hash...)
+		_, err := txn.Get(key)
+		return err
+	})
+	return err == nil
+}
+
+func (bc *Blockchain) addOrphanBlock(block *Block) error {
+	bc.orphansMu.Lock()
+	defer bc.orphansMu.Unlock()
+	
+	if len(bc.orphans) >= MaxOrphanBlocks {
+		// Evict oldest orphan
+		bc.evictOldestOrphan()
+	}
+	
+	bc.orphans[string(block.Header.Hash)] = &OrphanBlock{
 		Block:      block,
 		ReceivedAt: time.Now(),
 	}
-
-	bc.metrics.mu.Lock()
-	bc.metrics.OrphanBlocksReceived++
-	bc.metrics.mu.Unlock()
+	
+	bc.statsMu.Lock()
+	bc.stats.OrphanBlocksCount++
+	bc.statsMu.Unlock()
+	
+	return ErrOrphanBlock
 }
 
-// tryResolveOrphans attempts to resolve orphan blocks after adding a new block
-func (bc *Blockchain) tryResolveOrphans(parentHash [32]byte) int {
-	bc.orphanBlocksMutex.Lock()
-	defer bc.orphanBlocksMutex.Unlock()
-
-	resolved := 0
-	for hash, orphan := range bc.orphanBlocks {
-		if orphan.Block.Header.ParentHash == parentHash {
-			// Try to add this orphan
-			bc.logger.Info("Attempting to resolve orphan",
-				zap.String("hash", fmt.Sprintf("%x", hash[:8])))
-
-			// Remove from orphans first
-			delete(bc.orphanBlocks, hash)
-
-			// Try to add (without holding orphan mutex)
-			bc.orphanBlocksMutex.Unlock()
-			err := bc.AddBlock(orphan.Block)
-			bc.orphanBlocksMutex.Lock()
-
-			if err != nil {
-				bc.logger.Warn("Failed to resolve orphan",
-					zap.String("hash", fmt.Sprintf("%x", hash[:8])),
-					zap.Error(err))
-			} else {
-				resolved++
-			}
+func (bc *Blockchain) processOrphanBlocks(parentHash []byte) {
+	bc.orphansMu.Lock()
+	defer bc.orphansMu.Unlock()
+	
+	for hash, orphan := range bc.orphans {
+		if bytes.Equal(orphan.Block.Header.PrevBlockHash, parentHash) {
+			delete(bc.orphans, hash)
+			// Try to add orphan block again
+			go bc.AddBlock(orphan.Block)
 		}
 	}
-
-	return resolved
 }
 
-// attemptReorganization attempts a blockchain reorganization
-func (bc *Blockchain) attemptReorganization(block *types.Block) error {
-	bc.logger.Warn("⚠️ Chain reorganization required",
-		zap.Uint64("currentHeight", bc.height),
-		zap.Uint64("newBlockHeight", block.Header.Number))
-
-	// For now, reject reorganizations (implement in Phase 2)
-	// Full reorg implementation requires careful handling of state and transactions
-	return fmt.Errorf("reorganization not yet implemented: depth would be %d", 
-		bc.height-block.Header.Number+1)
-}
-
-// storeGenesisBlock stores the genesis block atomically
-func (bc *Blockchain) storeGenesisBlock(genesis *types.Block) error {
-	batch := bc.db.NewBatch()
-	defer batch.Cancel()
-
-	// Serialize genesis block
-	genesisData, err := genesis.Serialize()
-	if err != nil {
-		return fmt.Errorf("failed to serialize genesis: %w", err)
-	}
-
-	// Store genesis block by height
-	if err := batch.Set(storage.BlockHeightKey(0), genesisData); err != nil {
-		return err
-	}
-
-	// Store hash -> height mapping
-	heightBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(heightBytes, 0)
-	if err := batch.Set(storage.BlockHashKey(genesis.Hash), heightBytes); err != nil {
-		return err
-	}
-
-	// Store genesis hash reference
-	if err := batch.Set(storage.GenesisKey(), genesis.Hash[:]); err != nil {
-		return err
-	}
-
-	// Initialize chain metadata
-	if err := batch.Set(storage.ChainTipKey(), genesis.Hash[:]); err != nil {
-		return err
-	}
-
-	heightBytesChain := make([]byte, 8)
-	binary.BigEndian.PutUint64(heightBytesChain, 0)
-	if err := batch.Set(storage.ChainHeightKey(), heightBytesChain); err != nil {
-		return err
-	}
-
-	// Flush all changes atomically
-	if err := batch.Flush(); err != nil {
-		return fmt.Errorf("failed to flush genesis batch: %w", err)
-	}
-
-	bc.logger.Info("Genesis block stored successfully")
-	return nil
-}
-
-// storeBlock stores a block in the database with all indexes
-func (bc *Blockchain) storeBlock(block *types.Block) error {
-	batch := bc.db.NewBatch()
-	defer batch.Cancel()
-
-	// Serialize block
-	blockData, err := block.Serialize()
-	if err != nil {
-		return fmt.Errorf("serialization failed: %w", err)
-	}
-
-	// Store by height
-	heightKey := storage.BlockHeightKey(block.Header.Number)
-	if err := batch.Set(heightKey, blockData); err != nil {
-		return fmt.Errorf("failed to store block by height: %w", err)
-	}
-
-	// Store hash -> height mapping
-	hashKey := storage.BlockHashKey(block.Hash)
-	heightBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(heightBytes, block.Header.Number)
-	if err := batch.Set(hashKey, heightBytes); err != nil {
-		return fmt.Errorf("failed to store hash mapping: %w", err)
-	}
-
-	// Store transactions and receipts
-	for i, tx := range block.Transactions {
-		if err := bc.storeTransactionWithReceipt(batch, tx, block, uint32(i)); err != nil {
-			return fmt.Errorf("failed to store transaction %d: %w", i, err)
+func (bc *Blockchain) evictOldestOrphan() {
+	var oldest *OrphanBlock
+	var oldestHash string
+	
+	for hash, orphan := range bc.orphans {
+		if oldest == nil || orphan.ReceivedAt.Before(oldest.ReceivedAt) {
+			oldest = orphan
+			oldestHash = hash
 		}
 	}
-
-	// Flush batch atomically
-	if err := batch.Flush(); err != nil {
-		return fmt.Errorf("batch flush failed: %w", err)
+	
+	if oldest != nil {
+		delete(bc.orphans, oldestHash)
 	}
+}
 
+func (bc *Blockchain) updateChainState(block *Block) {
+	bc.chainState.Height = block.Header.Height
+	bc.chainState.BestHash = block.Header.Hash
+	bc.chainState.TotalWork.Add(bc.chainState.TotalWork, big.NewInt(int64(block.Header.Difficulty)))
+	bc.chainState.Difficulty = block.Header.Difficulty
+}
+
+func (bc *Blockchain) calculateChainWork(block *Block) *big.Int {
+	// Sum of all difficulties up to this block
+	work := big.NewInt(0)
+	// Implementation would walk back and sum difficulties
+	return work
+}
+
+func (bc *Blockchain) findReorgPath(newTip *Block) (*Block, []*Block, []*Block, error) {
+	// Find common ancestor and return blocks to revert/apply
+	return nil, nil, nil, nil // Placeholder
+}
+
+func (bc *Blockchain) createCheckpoint(height uint64) error {
+	// Create state checkpoint
 	return nil
 }
 
-// storeTransactionWithReceipt stores a transaction and its receipt
-func (bc *Blockchain) storeTransactionWithReceipt(batch *storage.Batch, tx *types.Transaction, block *types.Block, txIndex uint32) error {
-	// Serialize and store transaction
-	txData, err := tx.Serialize()
-	if err != nil {
-		return fmt.Errorf("tx serialization failed: %w", err)
-	}
-
-	txKey := storage.TxKey(tx.Hash)
-	if err := batch.Set(txKey, txData); err != nil {
-		return fmt.Errorf("failed to store transaction: %w", err)
-	}
-
-	// Create and store receipt
-	receipt := types.NewSuccessReceipt(tx.Hash, block.Hash, block.Header.Number, txIndex, tx.FeeDNT)
-	receiptData, err := receipt.Serialize()
-	if err != nil {
-		return fmt.Errorf("receipt serialization failed: %w", err)
-	}
-
-	receiptKey := storage.ReceiptKey(tx.Hash)
-	if err := batch.Set(receiptKey, receiptData); err != nil {
-		return fmt.Errorf("failed to store receipt: %w", err)
-	}
-
-	// Index transaction by address
-	if !tx.IsCoinbase() {
-		if err := bc.indexTransactionForAddress(batch, tx.From, tx.Hash); err != nil {
-			return fmt.Errorf("failed to index sender: %w", err)
-		}
-	}
-
-	if err := bc.indexTransactionForAddress(batch, tx.To, tx.Hash); err != nil {
-		return fmt.Errorf("failed to index recipient: %w", err)
-	}
-
-	return nil
-}
-
-// indexTransactionForAddress adds a transaction to an address's index
-func (bc *Blockchain) indexTransactionForAddress(batch *storage.Batch, address string, txHash [32]byte) error {
-	indexKey := storage.AddressTxIndexKey(address)
-
-	// Get existing index
-	var txHashes [][32]byte
-	indexData, err := bc.db.Get(indexKey)
-	if err == nil {
-		if err := json.Unmarshal(indexData, &txHashes); err != nil {
-			return fmt.Errorf("failed to unmarshal index: %w", err)
-		}
-	}
-
-	// Append new transaction
-	txHashes = append(txHashes, txHash)
-
-	// Store updated index
-	indexData, err = json.Marshal(txHashes)
-	if err != nil {
-		return fmt.Errorf("failed to marshal index: %w", err)
-	}
-
-	return batch.Set(indexKey, indexData)
-}
-
-// updateChainMetadataAtomic atomically updates chain tip and height
-func (bc *Blockchain) updateChainMetadataAtomic(block *types.Block) error {
-	batch := bc.db.NewBatch()
-	defer batch.Cancel()
-
-	// Update tip
-	if err := batch.Set(storage.ChainTipKey(), block.Hash[:]); err != nil {
-		return err
-	}
-
-	// Update height
-	heightBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(heightBytes, block.Header.Number)
-	if err := batch.Set(storage.ChainHeightKey(), heightBytes); err != nil {
-		return err
-	}
-
-	return batch.Flush()
-}
-
-// loadChainMetadata loads chain tip and height from database
-func (bc *Blockchain) loadChainMetadata() error {
-	// Load tip
-	tipKey := storage.ChainTipKey()
-	tipData, err := bc.db.Get(tipKey)
-	if err != nil {
-		return fmt.Errorf("failed to load chain tip: %w", err)
-	}
-	copy(bc.tip[:], tipData)
-
-	// Load height
-	heightKey := storage.ChainHeightKey()
-	heightData, err := bc.db.Get(heightKey)
-	if err != nil {
-		return fmt.Errorf("failed to load chain height: %w", err)
-	}
-	bc.height = binary.BigEndian.Uint64(heightData)
-
-	return nil
-}
-
-// validateGenesisBlock validates the genesis block
-func (bc *Blockchain) validateGenesisBlock(genesis *types.Block) error {
-	if genesis.Header.Number != 0 {
-		return fmt.Errorf("genesis block must have number 0, got %d", genesis.Header.Number)
-	}
-
-	if genesis.Header.ParentHash != [32]byte{} {
-		return fmt.Errorf("genesis block must have zero parent hash")
-	}
-
-	// Validate difficulty is reasonable
-	if genesis.Header.Difficulty.Cmp(big.NewInt(0)) <= 0 {
-		return fmt.Errorf("genesis difficulty must be positive")
-	}
-
-	return nil
-}
-
-// validateChainIntegrity performs integrity check on the blockchain
-func (bc *Blockchain) validateChainIntegrity() error {
-	bc.logger.Info("Validating chain integrity...")
-
-	// Validate last N blocks
-	blocksToCheck := uint64(10)
-	if bc.height < blocksToCheck {
-		blocksToCheck = bc.height + 1
-	}
-
-	for i := uint64(0); i < blocksToCheck; i++ {
-		height := bc.height - i
-		block, err := bc.GetBlock(height)
+func (bc *Blockchain) loadChainState() error {
+	return bc.db.View(func(txn *badger.Txn) error {
+		item, err := txn.Get(prefixChainState)
 		if err != nil {
-			return fmt.Errorf("failed to load block %d: %w", height, err)
+			return err
 		}
-
-		// Verify hash
-		computedHash := block.ComputeHash()
-		if computedHash != block.Hash {
-			return fmt.Errorf("block %d hash mismatch", height)
-		}
-
-		// Verify parent link (except genesis)
-		if height > 0 {
-			parentBlock, err := bc.GetBlock(height - 1)
-			if err != nil {
-				return fmt.Errorf("failed to load parent block %d: %w", height-1, err)
-			}
-
-			if block.Header.ParentHash != parentBlock.Hash {
-				return fmt.Errorf("block %d parent hash mismatch", height)
-			}
-		}
-	}
-
-	bc.logger.Info("✅ Chain integrity validated", 
-		zap.Uint64("blocksChecked", blocksToCheck))
-	return nil
+		
+		return item.Value(func(val []byte) error {
+			return json.Unmarshal(val, &bc.chainState)
+		})
+	})
 }
 
-// getRecentBlocksForValidation gets recent blocks for validation
-func (bc *Blockchain) getRecentBlocksForValidation(upToHeight uint64) ([]*types.BlockHeader, error) {
-	count := consensus.DifficultyWindow
-	if upToHeight+1 < uint64(count) {
-		count = int(upToHeight + 1)
-	}
+func (bc *Blockchain) incrementProcessed() {
+	bc.statsMu.Lock()
+	bc.stats.BlocksProcessed++
+	bc.statsMu.Unlock()
+}
 
-	blocks := make([]*types.BlockHeader, 0, count)
-	for i := 0; i < count; i++ {
-		height := upToHeight - uint64(i)
-		block, err := bc.GetBlock(height)
+func (bc *Blockchain) incrementRejected() {
+	bc.statsMu.Lock()
+	bc.stats.BlocksRejected++
+	bc.statsMu.Unlock()
+}
+
+// Public API methods
+
+func (bc *Blockchain) GetBlockByHeight(height uint64) (*Block, error) {
+	var block Block
+	err := bc.db.View(func(txn *badger.Txn) error {
+		key := append(prefixBlock, encodeUint64(height)...)
+		item, err := txn.Get(key)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get block %d: %w", height, err)
+			return err
 		}
-		blocks = append([]*types.BlockHeader{block.Header}, blocks...)
+		
+		return item.Value(func(val []byte) error {
+			return json.Unmarshal(val, &block)
+		})
+	})
+	
+	if err == badger.ErrKeyNotFound {
+		return nil, ErrBlockNotFound
 	}
-
-	return blocks, nil
+	
+	return &block, err
 }
 
-// GetBlock retrieves a block by height
-func (bc *Blockchain) GetBlock(height uint64) (*types.Block, error) {
-	key := storage.BlockHeightKey(height)
-	data, err := bc.db.Get(key)
-	if err != nil {
-		return nil, types.ErrBlockNotFound
-	}
-
-	return types.DeserializeBlock(data)
-}
-
-// GetBlockByHash retrieves a block by hash
-func (bc *Blockchain) GetBlockByHash(hash [32]byte) (*types.Block, error) {
-	// Get height from hash
-	hashKey := storage.BlockHashKey(hash)
-	heightData, err := bc.db.Get(hashKey)
-	if err != nil {
-		return nil, types.ErrBlockNotFound
-	}
-
-	height := binary.BigEndian.Uint64(heightData)
-	return bc.GetBlock(height)
-}
-
-// GetTransaction retrieves a transaction by hash
-func (bc *Blockchain) GetTransaction(txHash [32]byte) (*types.Transaction, error) {
-	txKey := storage.TxKey(txHash)
-	txData, err := bc.db.Get(txKey)
-	if err != nil {
-		return nil, types.ErrTxNotFound
-	}
-
-	return types.DeserializeTransaction(txData)
-}
-
-// GetTransactionReceipt retrieves a transaction receipt
-func (bc *Blockchain) GetTransactionReceipt(txHash [32]byte) (*types.Receipt, error) {
-	receiptKey := storage.ReceiptKey(txHash)
-	receiptData, err := bc.db.Get(receiptKey)
-	if err != nil {
-		return nil, types.ErrReceiptNotFound
-	}
-
-	return types.DeserializeReceipt(receiptData)
-}
-
-// GetTransactionsByAddress retrieves all transactions for an address
-func (bc *Blockchain) GetTransactionsByAddress(address string, limit int) ([]*types.Transaction, error) {
-	indexKey := storage.AddressTxIndexKey(address)
-	indexData, err := bc.db.Get(indexKey)
-	if err != nil {
-		return []*types.Transaction{}, nil
-	}
-
-	var txHashes [][32]byte
-	if err := json.Unmarshal(indexData, &txHashes); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal index: %w", err)
-	}
-
-	// Apply limit
-	if limit > 0 && limit < len(txHashes) {
-		txHashes = txHashes[len(txHashes)-limit:]
-	}
-
-	// Retrieve transactions
-	txs := make([]*types.Transaction, 0, len(txHashes))
-	for _, txHash := range txHashes {
-		tx, err := bc.GetTransaction(txHash)
+func (bc *Blockchain) GetBlockByHash(hash []byte) (*Block, error) {
+	var height uint64
+	err := bc.db.View(func(txn *badger.Txn) error {
+		key := append(prefixBlockHash, hash...)
+		item, err := txn.Get(key)
 		if err != nil {
-			continue
+			return err
 		}
-		txs = append(txs, tx)
+		
+		return item.Value(func(val []byte) error {
+			height = decodeUint64(val)
+			return nil
+		})
+	})
+	
+	if err != nil {
+		return nil, err
 	}
-
-	return txs, nil
+	
+	return bc.GetBlockByHeight(height)
 }
 
-// GetHeight returns the current chain height (thread-safe)
 func (bc *Blockchain) GetHeight() uint64 {
-	bc.mu.RLock()
-	defer bc.mu.RUnlock()
-	return bc.height
+	bc.chainMu.RLock()
+	defer bc.chainMu.RUnlock()
+	return bc.chainState.Height
 }
 
-// GetTip returns the current chain tip hash (thread-safe)
-func (bc *Blockchain) GetTip() [32]byte {
-	bc.mu.RLock()
-	defer bc.mu.RUnlock()
-	return bc.tip
+func (bc *Blockchain) GetBestHash() []byte {
+	bc.chainMu.RLock()
+	defer bc.chainMu.RUnlock()
+	return bc.chainState.BestHash
 }
 
-// GetState returns the state manager
-func (bc *Blockchain) GetState() *State {
-	return bc.state
+// Utility functions
+
+func encodeUint64(n uint64) []byte {
+	buf := make([]byte, 8)
+	binary.BigEndian.PutUint64(buf, n)
+	return buf
 }
 
-// IsAuthorizedMinter checks if an address is authorized to mint AFC
-func (bc *Blockchain) IsAuthorizedMinter(address string) bool {
-	return bc.mintAuthorities[address]
+func decodeUint64(b []byte) uint64 {
+	return binary.BigEndian.Uint64(b)
 }
 
-// GetMintAuthorities returns the list of authorized minters
-func (bc *Blockchain) GetMintAuthorities() []string {
-	authorities := make([]string, 0, len(bc.mintAuthorities))
-	for addr := range bc.mintAuthorities {
-		authorities = append(authorities, addr)
-	}
-	return authorities
+func encodeUint32(n uint32) []byte {
+	buf := make([]byte, 4)
+	binary.BigEndian.PutUint32(buf, n)
+	return buf
 }
 
-// updateMetrics updates blockchain metrics
-func (bc *Blockchain) updateMetrics(block *types.Block) {
-	bc.metrics.mu.Lock()
-	defer bc.metrics.mu.Unlock()
-
-	bc.metrics.TotalBlocks++
-	bc.metrics.TotalTransactions += uint64(len(block.Transactions))
-	bc.metrics.LastBlockTime = time.Now()
-
-	// Update average block time
-	if bc.metrics.TotalBlocks > 1 {
-		// Simple moving average
-		duration := time.Since(bc.metrics.LastBlockTime)
-		bc.metrics.AverageBlockTime = (bc.metrics.AverageBlockTime*time.Duration(bc.metrics.TotalBlocks-1) + duration) / time.Duration(bc.metrics.TotalBlocks)
-	}
-}
-
-// GetMetrics returns current blockchain metrics (thread-safe)
-func (bc *Blockchain) GetMetrics() map[string]interface{} {
-	bc.metrics.mu.RLock()
-	defer bc.metrics.mu.RUnlock()
-
-	bc.mu.RLock()
-	currentHeight := bc.height
-	bc.mu.RUnlock()
-
-	bc.orphanBlocksMutex.RLock()
-	orphanCount := len(bc.orphanBlocks)
-	bc.orphanBlocksMutex.RUnlock()
-
-	return map[string]interface{}{
-		"height":              currentHeight,
-		"total_blocks":        bc.metrics.TotalBlocks,
-		"total_transactions":  bc.metrics.TotalTransactions,
-		"validation_errors":   bc.metrics.ValidationErrors,
-		"state_commit_errors": bc.metrics.StateCommitErrors,
-		"orphan_blocks":       orphanCount,
-		"reorganizations":     bc.metrics.ReorganizationsCount,
-		"avg_block_time_sec":  bc.metrics.AverageBlockTime.Seconds(),
-	}
-}
-
-// startBackgroundTasks starts background maintenance tasks
-func (bc *Blockchain) startBackgroundTasks() {
-	// Orphan cleanup task
-	bc.wg.Add(1)
-	go bc.orphanCleanupTask()
-}
-
-// orphanCleanupTask periodically cleans up old orphan blocks
-func (bc *Blockchain) orphanCleanupTask() {
-	defer bc.wg.Done()
-
-	ticker := time.NewTicker(30 * time.Minute)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			bc.cleanupOrphanBlocks()
-		case <-bc.ctx.Done():
-			return
-		}
-	}
-}
-
-// cleanupOrphanBlocks removes orphan blocks that are too old
-func (bc *Blockchain) cleanupOrphanBlocks() {
-	bc.orphanBlocksMutex.Lock()
-	defer bc.orphanBlocksMutex.Unlock()
-
-	now := time.Now()
-	removed := 0
-
-	for hash, orphan := range bc.orphanBlocks {
-		if now.Sub(orphan.ReceivedAt) > OrphanBlockTTL {
-			delete(bc.orphanBlocks, hash)
-			removed++
-		}
-	}
-
-	if removed > 0 {
-		bc.logger.Info("Cleaned up old orphan blocks",
-			zap.Int("removed", removed),
-			zap.Int("remaining", len(bc.orphanBlocks)))
-	}
-}
-
-// Shutdown gracefully shuts down the blockchain
-func (bc *Blockchain) Shutdown() error {
-	bc.logger.Info("🛑 Shutting down blockchain...")
-
-	// Cancel context to stop background tasks
-	bc.cancelFunc()
-
-	// Wait for background tasks to complete
-	bc.wg.Wait()
-
-	bc.logger.Info("✅ Blockchain shut down successfully")
-	return nil
-}
-
-// validateBlockchainConfig validates blockchain configuration
-func validateBlockchainConfig(config *Config) error {
-	if config == nil {
-		return fmt.Errorf("config is nil")
-	}
-	if config.DB == nil {
-		return fmt.Errorf("database is required")
-	}
-	if config.Logger == nil {
-		return fmt.Errorf("logger is required")
-	}
-	return nil
+func encodeInt64(n int64) []byte {
+	buf := make([]byte, 8)
+	binary.BigEndian.PutUint64(buf, uint64(n))
+	return buf
 }

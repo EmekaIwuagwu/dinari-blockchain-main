@@ -1,350 +1,750 @@
 package miner
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"math/big"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
-
-	"github.com/EmekaIwuagwu/dinari-blockchain/internal/consensus"
-	"github.com/EmekaIwuagwu/dinari-blockchain/internal/core"
-	"github.com/EmekaIwuagwu/dinari-blockchain/internal/mempool"
-	"github.com/EmekaIwuagwu/dinari-blockchain/internal/types"
-	"go.uber.org/zap"
 )
 
 const (
-	// MaxBlockSize is the maximum size of a block in bytes
-	MaxBlockSize = 1024 * 1024 // 1MB
-
-	// MaxTxPerBlock is the maximum number of transactions per block
-	MaxTxPerBlock = 10000
+	// Mining configuration
+	DefaultNumThreads = 4
+	MaxNumThreads     = 32
+	
+	// Block template refresh interval
+	TemplateRefreshInterval = 10 * time.Second
+	
+	// Mining statistics update interval
+	StatsUpdateInterval = 5 * time.Second
+	
+	// Transaction selection limits
+	MaxTransactionsPerBlock = 5000
+	MaxBlockSize            = 1 << 20 // 1MB
+	
+	// Mining parameters
+	NonceRangePerThread = 0x100000 // 1M nonces per thread
+	
+	// Reward parameters
+	InitialBlockReward = 50 * 1e8        // 50 DNT with 8 decimals
+	HalvingInterval    = 210000          // Halve reward every 210,000 blocks
+	MaxSupply          = 21000000 * 1e8  // 21M DNT total
+	
+	// Auto-restart settings
+	MaxRestartAttempts = 3
+	RestartDelay       = 5 * time.Second
 )
 
-// Miner handles block mining
-type Miner struct {
-	blockchain   *core.Blockchain
-	mempool      *mempool.Mempool
-	pow          *consensus.ProofOfWork
-	rewardCalc   *consensus.RewardCalculator
-	diffAdjust   *consensus.DifficultyAdjuster
-	logger       *zap.Logger
-	minerAddress string
+var (
+	ErrMinerNotRunning = errors.New("miner is not running")
+	ErrMinerRunning    = errors.New("miner is already running")
+	ErrInvalidAddress  = errors.New("invalid miner address")
+	ErrNoTransactions  = errors.New("no transactions available")
+)
 
-	// Mining control
-	mining   bool
-	stopChan chan struct{}
-	mu       sync.RWMutex
-
-	// Statistics
-	blocksMinedCount uint64
-	hashesComputed   uint64
+// Block represents a mined block
+type Block struct {
+	Header       *BlockHeader
+	Transactions []*Transaction
 }
 
-// Config contains miner configuration
-type Config struct {
-	Blockchain   *core.Blockchain
-	Mempool      *mempool.Mempool
-	Logger       *zap.Logger
-	MinerAddress string
+// BlockHeader represents block header
+type BlockHeader struct {
+	Version       uint32
+	Height        uint64
+	PrevBlockHash []byte
+	MerkleRoot    []byte
+	Timestamp     int64
+	Difficulty    uint32
+	Nonce         uint64
+	Hash          []byte
+	StateRoot     []byte
+}
+
+// Transaction represents a transaction
+type Transaction struct {
+	Hash      []byte
+	From      string
+	To        string
+	Amount    *big.Int
+	TokenType string
+	FeeDNT    *big.Int
+	Nonce     uint64
+	Timestamp int64
+	Signature []byte
+	PublicKey []byte
+	Data      []byte
+}
+
+// Miner manages the mining process
+type Miner struct {
+	// Configuration
+	config *MinerConfig
+	
+	// External dependencies
+	blockchain BlockchainInterface
+	mempool    MempoolInterface
+	consensus  ConsensusInterface
+	
+	// Mining state
+	running   atomic.Bool
+	mining    atomic.Bool
+	stopChan  chan struct{}
+	pauseChan chan struct{}
+	
+	// Worker management
+	workers   []*MiningWorker
+	workersMu sync.RWMutex
+	
+	// Statistics
+	stats      *MiningStats
+	statsMu    sync.RWMutex
+	lastUpdate time.Time
+	
+	// Current mining job
+	currentTemplate *BlockTemplate
+	templateMu      sync.RWMutex
+	
+	// Lifecycle
+	wg sync.WaitGroup
+}
+
+// MinerConfig contains miner configuration
+type MinerConfig struct {
+	MinerAddress    string
+	NumThreads      int
+	CoinbaseMessage []byte
+	CPUPriority     int // 0-100, percentage of CPU to use
+}
+
+// MiningStats tracks mining statistics
+type MiningStats struct {
+	BlocksMined      uint64
+	TotalHashes      uint64
+	CurrentHashRate  float64
+	AverageHashRate  float64
+	StartTime        time.Time
+	LastBlockTime    time.Time
+	Uptime           time.Duration
+	BlocksRejected   uint64
+	
+	// Economic stats
+	TotalReward      *big.Int
+	TotalFees        *big.Int
+	EstimatedRevenue *big.Int
+}
+
+// BlockTemplate represents a template for mining
+type BlockTemplate struct {
+	Header       *BlockHeader
+	Transactions []*Transaction
+	TotalFees    *big.Int
+	BlockReward  *big.Int
+}
+
+// MiningWorker represents a mining thread
+type MiningWorker struct {
+	id          int
+	miner       *Miner
+	stopChan    chan struct{}
+	hashCounter uint64
+}
+
+// Interfaces for external dependencies
+type BlockchainInterface interface {
+	GetHeight() uint64
+	GetBestHash() []byte
+	GetDifficulty() uint32
+	AddBlock(block *Block) error
+	ValidateBlock(block *Block) error
+}
+
+type MempoolInterface interface {
+	GetPendingTransactions(limit int) []*Transaction
+	RemoveTransactions(hashes []string) error
+}
+
+type ConsensusInterface interface {
+	CalculateHash(header *BlockHeader) []byte
+	ValidateProofOfWork(header *BlockHeader) error
+	CalculateNextDifficulty(prevHeight uint64) uint32
 }
 
 // NewMiner creates a new miner instance
-func NewMiner(config *Config) *Miner {
-	return &Miner{
-		blockchain:   config.Blockchain,
-		mempool:      config.Mempool,
-		pow:          consensus.NewProofOfWork(consensus.TargetBlockTime),
-		rewardCalc:   consensus.NewRewardCalculator(),
-		diffAdjust:   consensus.NewDifficultyAdjuster(),
-		logger:       config.Logger,
-		minerAddress: config.MinerAddress,
-		stopChan:     make(chan struct{}),
+func NewMiner(config *MinerConfig, blockchain BlockchainInterface, mempool MempoolInterface, consensus ConsensusInterface) (*Miner, error) {
+	if err := validateMinerConfig(config); err != nil {
+		return nil, fmt.Errorf("invalid config: %w", err)
 	}
+	
+	if blockchain == nil || mempool == nil || consensus == nil {
+		return nil, errors.New("dependencies cannot be nil")
+	}
+	
+	miner := &Miner{
+		config:     config,
+		blockchain: blockchain,
+		mempool:    mempool,
+		consensus:  consensus,
+		stopChan:   make(chan struct{}),
+		pauseChan:  make(chan struct{}),
+		stats: &MiningStats{
+			StartTime:        time.Now(),
+			TotalReward:      big.NewInt(0),
+			TotalFees:        big.NewInt(0),
+			EstimatedRevenue: big.NewInt(0),
+		},
+		lastUpdate: time.Now(),
+	}
+	
+	return miner, nil
 }
 
 // Start starts the mining process
 func (m *Miner) Start() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if m.mining {
-		return fmt.Errorf("miner already running")
+	if m.running.Load() {
+		return ErrMinerRunning
 	}
-
-	m.mining = true
-	m.stopChan = make(chan struct{})
-
-	go m.miningLoop()
-
-	m.logger.Info("Miner started", zap.String("address", m.minerAddress))
+	
+	fmt.Printf("⛏️  Starting miner with %d threads\n", m.config.NumThreads)
+	fmt.Printf("   Miner address: %s\n", m.config.MinerAddress)
+	
+	m.running.Store(true)
+	m.stats.StartTime = time.Now()
+	
+	// Start mining coordinator
+	m.wg.Add(1)
+	go m.miningCoordinator()
+	
+	// Start statistics updater
+	m.wg.Add(1)
+	go m.statsUpdater()
+	
+	fmt.Println("✅ Miner started")
+	
 	return nil
 }
 
-// Stop stops the mining process
-func (m *Miner) Stop() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if !m.mining {
-		return
+// Stop gracefully stops the mining process
+func (m *Miner) Stop() error {
+	if !m.running.Load() {
+		return ErrMinerNotRunning
 	}
-
-	m.mining = false
+	
+	fmt.Println("🛑 Stopping miner...")
+	
+	// Signal stop
 	close(m.stopChan)
-
-	m.logger.Info("Miner stopped")
+	
+	// Stop all workers
+	m.stopAllWorkers()
+	
+	// Wait for goroutines to finish
+	m.wg.Wait()
+	
+	m.running.Store(false)
+	m.mining.Store(false)
+	
+	// Print final statistics
+	m.printFinalStats()
+	
+	fmt.Println("✅ Miner stopped")
+	
+	return nil
 }
 
-// IsRunning returns true if miner is currently mining
+// Pause temporarily pauses mining
+func (m *Miner) Pause() error {
+	if !m.running.Load() {
+		return ErrMinerNotRunning
+	}
+	
+	if !m.mining.Load() {
+		return errors.New("miner is not mining")
+	}
+	
+	m.stopAllWorkers()
+	m.mining.Store(false)
+	
+	fmt.Println("⏸️  Mining paused")
+	
+	return nil
+}
+
+// Resume resumes mining after pause
+func (m *Miner) Resume() error {
+	if !m.running.Load() {
+		return ErrMinerNotRunning
+	}
+	
+	if m.mining.Load() {
+		return errors.New("miner is already mining")
+	}
+	
+	m.mining.Store(true)
+	m.startWorkers()
+	
+	fmt.Println("▶️  Mining resumed")
+	
+	return nil
+}
+
+// IsRunning returns whether the miner is running
 func (m *Miner) IsRunning() bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.mining
+	return m.running.Load()
 }
 
-// miningLoop is the main mining loop
-// miningLoop is the main mining loop
-func (m *Miner) miningLoop() {
+// IsMining returns whether the miner is actively mining
+func (m *Miner) IsMining() bool {
+	return m.mining.Load()
+}
+
+// GetStats returns current mining statistics
+func (m *Miner) GetStats() MiningStats {
+	m.statsMu.RLock()
+	defer m.statsMu.RUnlock()
+	
+	stats := *m.stats
+	stats.Uptime = time.Since(stats.StartTime)
+	
+	return stats
+}
+
+// miningCoordinator manages the mining process
+func (m *Miner) miningCoordinator() {
+	defer m.wg.Done()
+	
+	templateTicker := time.NewTicker(TemplateRefreshInterval)
+	defer templateTicker.Stop()
+	
 	for {
 		select {
 		case <-m.stopChan:
 			return
-		default:
-			// Mine a block
-			block, err := m.mineBlock()
-			if err != nil {
-				m.logger.Error("Mining failed", zap.Error(err))
-				time.Sleep(time.Second)
+			
+		case <-templateTicker.C:
+			// Refresh block template
+			if err := m.refreshBlockTemplate(); err != nil {
+				fmt.Printf("Failed to refresh template: %v\n", err)
 				continue
 			}
-
-			if block != nil {
-				// Calculate reward info for logging
-				baseReward := m.rewardCalc.CalculateBlockReward(block.Header.Number)
-				totalFees := big.NewInt(0)
-				for _, tx := range block.Transactions[1:] {
-					totalFees.Add(totalFees, tx.FeeDNT)
-				}
-				totalReward := new(big.Int).Add(baseReward, totalFees)
-
-				// Add block to blockchain
-				if err := m.blockchain.AddBlock(block); err != nil {
-					m.logger.Error("Failed to add mined block", zap.Error(err))
-					continue
-				}
-
-				m.blocksMinedCount++
-
-				m.logger.Info("🎉 BLOCK MINED SUCCESSFULLY! 🎉",
-					zap.Uint64("height", block.Header.Number),
-					zap.String("hash", fmt.Sprintf("%x", block.Hash[:16])),
-					zap.Uint32("txCount", block.Header.TxCount),
-					zap.String("miner", m.minerAddress),
-					zap.String("baseReward", baseReward.String()),
-					zap.String("fees", totalFees.String()),
-					zap.String("totalReward", totalReward.String()),
-					zap.Uint64("nonce", block.Header.Nonce))
-
-				// Remove mined transactions from mempool
-				for _, tx := range block.Transactions {
-					if !tx.IsCoinbase() {
-						m.mempool.RemoveTransaction(tx.Hash)
-					}
-				}
+			
+			// Start workers if not mining
+			if !m.mining.Load() {
+				m.mining.Store(true)
+				m.startWorkers()
 			}
 		}
 	}
 }
 
-// mineBlock creates and mines a new block
-func (m *Miner) mineBlock() (*types.Block, error) {
-	// Get current chain state
+// refreshBlockTemplate creates a new block template
+func (m *Miner) refreshBlockTemplate() error {
+	// Get blockchain state
 	height := m.blockchain.GetHeight()
-	tip := m.blockchain.GetTip()
-
-	// Calculate difficulty for next block
-	difficulty := m.calculateNextDifficulty()
-
-	// Assemble block
-	block, err := m.assembleBlock(height+1, tip, difficulty)
-	if err != nil {
-		return nil, fmt.Errorf("failed to assemble block: %w", err)
-	}
-
-	// Mine the block (find valid nonce)
-	m.logger.Debug("Mining block",
-		zap.Uint64("height", block.Header.Number),
-		zap.String("difficulty", difficulty.String()))
-
-	startTime := time.Now()
-	nonce, found := m.pow.MineBlock(block, m.stopChan)
-
-	if !found {
-		// Mining was stopped
-		return nil, nil
-	}
-
-	duration := time.Since(startTime)
-
-	block.Header.Nonce = nonce
-	block.Hash = block.ComputeHash()
-
-	m.logger.Info("Valid nonce found",
-		zap.Uint64("nonce", nonce),
-		zap.Duration("duration", duration))
-
-	return block, nil
-}
-
-// assembleBlock assembles a new block with transactions from mempool
-func (m *Miner) assembleBlock(number uint64, parentHash [32]byte, difficulty *big.Int) (*types.Block, error) {
-	// Get transactions from mempool (sorted by priority)
-	pendingTxs := m.mempool.GetTransactions(MaxTxPerBlock)
-
+	prevHash := m.blockchain.GetBestHash()
+	difficulty := m.blockchain.GetDifficulty()
+	
+	// Get pending transactions
+	transactions := m.mempool.GetPendingTransactions(MaxTransactionsPerBlock)
+	
+	// Select best transactions by fee
+	selectedTxs, totalFees := m.selectTransactions(transactions)
+	
+	// Calculate block reward
+	blockReward := m.calculateBlockReward(height + 1)
+	
 	// Create coinbase transaction
-	blockReward := m.rewardCalc.CalculateBlockReward(number)
-	coinbaseTx := types.NewCoinbaseTransaction(m.minerAddress, blockReward, number)
-
-	// Calculate total fees
-	totalFees := big.NewInt(0)
-	transactions := []*types.Transaction{coinbaseTx}
-	blockSize := coinbaseTx.Size()
-
-	// Add transactions while respecting limits
-	for _, tx := range pendingTxs {
-		txSize := tx.Size()
-
-		// Check block size limit
-		if blockSize+txSize > MaxBlockSize {
-			break
-		}
-
-		// Check tx count limit
-		if len(transactions) >= MaxTxPerBlock {
-			break
-		}
-
-		// Validate transaction against current state
-		if err := m.validateTxForBlock(tx); err != nil {
-			m.logger.Debug("Skipping invalid transaction",
-				zap.String("hash", fmt.Sprintf("%x", tx.Hash[:8])),
-				zap.Error(err))
-			continue
-		}
-
-		transactions = append(transactions, tx)
-		totalFees.Add(totalFees, tx.FeeDNT)
-		blockSize += txSize
+	coinbaseTx := m.createCoinbaseTransaction(height+1, blockReward, totalFees)
+	
+	// Prepend coinbase
+	allTxs := append([]*Transaction{coinbaseTx}, selectedTxs...)
+	
+	// Calculate merkle root
+	merkleRoot := m.calculateMerkleRoot(allTxs)
+	
+	// Create block header
+	header := &BlockHeader{
+		Version:       1,
+		Height:        height + 1,
+		PrevBlockHash: prevHash,
+		MerkleRoot:    merkleRoot,
+		Timestamp:     time.Now().Unix(),
+		Difficulty:    difficulty,
+		Nonce:         0,
 	}
-
-	// Add total fees to coinbase
-	coinbaseTx.Amount.Add(coinbaseTx.Amount, totalFees)
-
-	// Create block
-	block := types.NewBlock(parentHash, number, transactions, m.minerAddress, difficulty)
-
-	return block, nil
-}
-
-// validateTxForBlock validates a transaction for inclusion in a block
-// validateTxForBlock validates a transaction for inclusion in a block
-func (m *Miner) validateTxForBlock(tx *types.Transaction) error {
-	// Special handling for mint transactions
-	if tx.IsMint() {
-		// Mint transactions create new tokens, so they don't need balance checks
-		// Just do basic validation
-		if tx.TokenType != string(types.TokenAFC) {
-			return types.ErrMintOnlyAFC
-		}
-		if tx.FeeDNT.Cmp(big.NewInt(0)) != 0 {
-			return types.ErrInvalidMintTx
-		}
-		// Mint is valid
-		return nil
+	
+	// Store template
+	template := &BlockTemplate{
+		Header:       header,
+		Transactions: allTxs,
+		TotalFees:    totalFees,
+		BlockReward:  blockReward,
 	}
-
-	// Basic validation
-	if err := tx.Validate(); err != nil {
-		return err
-	}
-
-	// Get account state
-	account, err := m.blockchain.GetState().GetAccount(tx.From)
-	if err != nil {
-		return err
-	}
-
-	// Verify nonce
-	if tx.Nonce != account.Nonce {
-		return types.ErrInvalidNonce
-	}
-
-	// Verify balances
-	requiredDNT := new(big.Int).Set(tx.FeeDNT)
-	if tx.TokenType == string(types.TokenDNT) {
-		requiredDNT.Add(requiredDNT, tx.Amount)
-	}
-
-	if account.BalanceDNT.Cmp(requiredDNT) < 0 {
-		return types.ErrInsufficientBalance
-	}
-
-	if tx.TokenType == string(types.TokenAFC) {
-		if account.BalanceAFC.Cmp(tx.Amount) < 0 {
-			return types.ErrInsufficientBalance
-		}
-	}
-
+	
+	m.templateMu.Lock()
+	m.currentTemplate = template
+	m.templateMu.Unlock()
+	
+	fmt.Printf("📋 Block template refreshed: height=%d, txs=%d, fees=%s DNT\n",
+		header.Height, len(selectedTxs), formatAmount(totalFees))
+	
 	return nil
 }
 
-// calculateNextDifficulty calculates the difficulty for the next block
-func (m *Miner) calculateNextDifficulty() *big.Int {
-	height := m.blockchain.GetHeight()
-	nextHeight := height + 1
-
-	// Check if difficulty adjustment should occur
-	if !m.diffAdjust.ShouldAdjustDifficulty(nextHeight) {
-		// Use current difficulty
-		currentBlock, err := m.blockchain.GetBlock(height)
-		if err != nil {
-			return big.NewInt(consensus.MinDifficulty)
-		}
-		return currentBlock.Header.Difficulty
-	}
-
-	// Get recent blocks for difficulty calculation
-	recentBlocks := make([]*types.BlockHeader, 0, consensus.DifficultyWindow)
-	for i := uint64(0); i < consensus.DifficultyWindow && i <= height; i++ {
-		blockHeight := height - i
-		block, err := m.blockchain.GetBlock(blockHeight)
-		if err != nil {
+// selectTransactions selects transactions based on fees
+func (m *Miner) selectTransactions(txs []*Transaction) ([]*Transaction, *big.Int) {
+	// Sort by fee per byte (already done in mempool)
+	selected := make([]*Transaction, 0)
+	totalFees := big.NewInt(0)
+	totalSize := 0
+	
+	for _, tx := range txs {
+		// Calculate transaction size
+		txSize := m.estimateTransactionSize(tx)
+		
+		// Check if adding this tx would exceed block size
+		if totalSize+txSize > MaxBlockSize {
 			break
 		}
-		recentBlocks = append([]*types.BlockHeader{block.Header}, recentBlocks...)
+		
+		selected = append(selected, tx)
+		totalFees.Add(totalFees, tx.FeeDNT)
+		totalSize += txSize
 	}
-
-	// Calculate new difficulty
-	return m.diffAdjust.CalculateNextDifficulty(recentBlocks)
+	
+	return selected, totalFees
 }
 
-// Stats returns miner statistics
-func (m *Miner) Stats() map[string]interface{} {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+// startWorkers starts mining worker threads
+func (m *Miner) startWorkers() {
+	m.workersMu.Lock()
+	defer m.workersMu.Unlock()
+	
+	// Clear existing workers
+	m.workers = make([]*MiningWorker, 0, m.config.NumThreads)
+	
+	// Start new workers
+	for i := 0; i < m.config.NumThreads; i++ {
+		worker := &MiningWorker{
+			id:       i,
+			miner:    m,
+			stopChan: make(chan struct{}),
+		}
+		
+		m.workers = append(m.workers, worker)
+		
+		m.wg.Add(1)
+		go worker.mine()
+	}
+	
+	fmt.Printf("🔨 Started %d mining workers\n", m.config.NumThreads)
+}
 
-	return map[string]interface{}{
-		"mining":      m.mining,
-		"blocksMinedCount": m.blocksMinedCount,
-		"minerAddress": m.minerAddress,
+// stopAllWorkers stops all mining workers
+func (m *Miner) stopAllWorkers() {
+	m.workersMu.Lock()
+	defer m.workersMu.Unlock()
+	
+	for _, worker := range m.workers {
+		close(worker.stopChan)
+	}
+	
+	m.workers = nil
+}
+
+// mine performs the actual mining work
+func (w *MiningWorker) mine() {
+	defer w.miner.wg.Done()
+	
+	for {
+		select {
+		case <-w.stopChan:
+			return
+			
+		default:
+			// Get current template
+			w.miner.templateMu.RLock()
+			template := w.miner.currentTemplate
+			w.miner.templateMu.RUnlock()
+			
+			if template == nil {
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+			
+			// Mine a nonce range
+			if nonce, hash := w.mineNonceRange(template.Header); nonce > 0 {
+				// Found valid block!
+				w.handleBlockFound(template, nonce, hash)
+				return
+			}
+		}
 	}
 }
 
-// SetMinerAddress updates the miner address
-func (m *Miner) SetMinerAddress(address string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.minerAddress = address
-	m.logger.Info("Miner address updated", zap.String("address", address))
+// mineNonceRange tries to find a valid nonce in a range
+func (w *MiningWorker) mineNonceRange(header *BlockHeader) (uint64, []byte) {
+	// Calculate nonce range for this worker
+	startNonce := uint64(w.id) * NonceRangePerThread
+	endNonce := startNonce + NonceRangePerThread
+	
+	// Create a copy of header for this worker
+	localHeader := &BlockHeader{
+		Version:       header.Version,
+		Height:        header.Height,
+		PrevBlockHash: header.PrevBlockHash,
+		MerkleRoot:    header.MerkleRoot,
+		Timestamp:     time.Now().Unix(), // Fresh timestamp
+		Difficulty:    header.Difficulty,
+	}
+	
+	// Calculate target
+	target := w.miner.difficultyToTarget(header.Difficulty)
+	
+	// Try nonces in range
+	for nonce := startNonce; nonce < endNonce; nonce++ {
+		// Check if we should stop
+		select {
+		case <-w.stopChan:
+			return 0, nil
+		default:
+		}
+		
+		localHeader.Nonce = nonce
+		hash := w.miner.consensus.CalculateHash(localHeader)
+		
+		// Increment hash counter
+		atomic.AddUint64(&w.hashCounter, 1)
+		w.miner.stats.TotalHashes++
+		
+		// Check if hash meets target
+		hashInt := new(big.Int).SetBytes(hash)
+		if hashInt.Cmp(target) <= 0 {
+			return nonce, hash
+		}
+	}
+	
+	return 0, nil
+}
+
+// handleBlockFound processes a successfully mined block
+func (w *MiningWorker) handleBlockFound(template *BlockTemplate, nonce uint64, hash []byte) {
+	fmt.Printf("\n🎉 BLOCK FOUND! Height: %d, Nonce: %d\n", template.Header.Height, nonce)
+	
+	// Update header with winning nonce and hash
+	template.Header.Nonce = nonce
+	template.Header.Hash = hash
+	
+	// Create block
+	block := &Block{
+		Header:       template.Header,
+		Transactions: template.Transactions,
+	}
+	
+	// Submit block to blockchain
+	if err := w.miner.blockchain.AddBlock(block); err != nil {
+		fmt.Printf("❌ Block rejected: %v\n", err)
+		w.miner.statsMu.Lock()
+		w.miner.stats.BlocksRejected++
+		w.miner.statsMu.Unlock()
+		return
+	}
+	
+	// Remove mined transactions from mempool
+	txHashes := make([]string, 0, len(template.Transactions))
+	for _, tx := range template.Transactions[1:] { // Skip coinbase
+		txHashes = append(txHashes, string(tx.Hash))
+	}
+	w.miner.mempool.RemoveTransactions(txHashes)
+	
+	// Update statistics
+	w.miner.statsMu.Lock()
+	w.miner.stats.BlocksMined++
+	w.miner.stats.LastBlockTime = time.Now()
+	w.miner.stats.TotalReward.Add(w.miner.stats.TotalReward, template.BlockReward)
+	w.miner.stats.TotalFees.Add(w.miner.stats.TotalFees, template.TotalFees)
+	w.miner.statsMu.Unlock()
+	
+	fmt.Printf("💰 Reward: %s DNT + %s DNT fees\n",
+		formatAmount(template.BlockReward),
+		formatAmount(template.TotalFees))
+}
+
+// statsUpdater periodically updates mining statistics
+func (m *Miner) statsUpdater() {
+	defer m.wg.Done()
+	
+	ticker := time.NewTicker(StatsUpdateInterval)
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case <-m.stopChan:
+			return
+			
+		case <-ticker.C:
+			m.updateHashRate()
+		}
+	}
+}
+
+// updateHashRate calculates and updates hash rate
+func (m *Miner) updateHashRate() {
+	now := time.Now()
+	duration := now.Sub(m.lastUpdate)
+	
+	if duration == 0 {
+		return
+	}
+	
+	m.workersMu.RLock()
+	totalHashes := uint64(0)
+	for _, worker := range m.workers {
+		totalHashes += atomic.LoadUint64(&worker.hashCounter)
+		atomic.StoreUint64(&worker.hashCounter, 0) // Reset counter
+	}
+	m.workersMu.RUnlock()
+	
+	hashRate := float64(totalHashes) / duration.Seconds()
+	
+	m.statsMu.Lock()
+	m.stats.CurrentHashRate = hashRate
+	
+	// Update average hash rate
+	if m.stats.AverageHashRate == 0 {
+		m.stats.AverageHashRate = hashRate
+	} else {
+		// Exponential moving average
+		alpha := 0.2
+		m.stats.AverageHashRate = alpha*hashRate + (1-alpha)*m.stats.AverageHashRate
+	}
+	m.statsMu.Unlock()
+	
+	m.lastUpdate = now
+	
+	// Print status
+	if m.mining.Load() {
+		fmt.Printf("⛏️  Mining: %.2f kH/s (avg: %.2f kH/s) | Blocks: %d\n",
+			hashRate/1000, m.stats.AverageHashRate/1000, m.stats.BlocksMined)
+	}
+}
+
+// Helper methods
+
+func (m *Miner) createCoinbaseTransaction(height uint64, reward, fees *big.Int) *Transaction {
+	totalReward := new(big.Int).Add(reward, fees)
+	
+	return &Transaction{
+		From:      "COINBASE",
+		To:        m.config.MinerAddress,
+		Amount:    totalReward,
+		TokenType: "DNT",
+		FeeDNT:    big.NewInt(0),
+		Nonce:     height, // Use height as nonce for coinbase
+		Timestamp: time.Now().Unix(),
+		Data:      m.config.CoinbaseMessage,
+	}
+}
+
+func (m *Miner) calculateBlockReward(height uint64) *big.Int {
+	halvings := height / HalvingInterval
+	if halvings >= 64 {
+		return big.NewInt(0) // All coins mined
+	}
+	
+	reward := big.NewInt(InitialBlockReward)
+	reward.Rsh(reward, uint(halvings)) // Divide by 2^halvings
+	
+	return reward
+}
+
+func (m *Miner) calculateMerkleRoot(txs []*Transaction) []byte {
+	if len(txs) == 0 {
+		return make([]byte, 32)
+	}
+	
+	hashes := make([][]byte, len(txs))
+	for i, tx := range txs {
+		hashes[i] = tx.Hash
+	}
+	
+	// Build merkle tree
+	for len(hashes) > 1 {
+		if len(hashes)%2 != 0 {
+			hashes = append(hashes, hashes[len(hashes)-1])
+		}
+		
+		newLevel := make([][]byte, 0, len(hashes)/2)
+		for i := 0; i < len(hashes); i += 2 {
+			combined := append(hashes[i], hashes[i+1]...)
+			hash := sha256.Sum256(combined)
+			newLevel = append(newLevel, hash[:])
+		}
+		hashes = newLevel
+	}
+	
+	return hashes[0]
+}
+
+func (m *Miner) difficultyToTarget(difficulty uint32) *big.Int {
+	maxTarget := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
+	target := new(big.Int).Div(maxTarget, big.NewInt(int64(difficulty)))
+	return target
+}
+
+func (m *Miner) estimateTransactionSize(tx *Transaction) int {
+	// Rough estimate: 250 bytes per transaction
+	return 250
+}
+
+func (m *Miner) printFinalStats() {
+	stats := m.GetStats()
+	
+	fmt.Println("\n📊 Final Mining Statistics:")
+	fmt.Printf("   Blocks Mined: %d\n", stats.BlocksMined)
+	fmt.Printf("   Blocks Rejected: %d\n", stats.BlocksRejected)
+	fmt.Printf("   Total Hashes: %d\n", stats.TotalHashes)
+	fmt.Printf("   Average Hash Rate: %.2f kH/s\n", stats.AverageHashRate/1000)
+	fmt.Printf("   Total Reward: %s DNT\n", formatAmount(stats.TotalReward))
+	fmt.Printf("   Total Fees: %s DNT\n", formatAmount(stats.TotalFees))
+	fmt.Printf("   Uptime: %v\n", stats.Uptime)
+}
+
+func validateMinerConfig(config *MinerConfig) error {
+	if config.MinerAddress == "" {
+		return ErrInvalidAddress
+	}
+	
+	if config.NumThreads <= 0 {
+		config.NumThreads = runtime.NumCPU()
+	}
+	
+	if config.NumThreads > MaxNumThreads {
+		config.NumThreads = MaxNumThreads
+	}
+	
+	if config.CPUPriority < 0 || config.CPUPriority > 100 {
+		config.CPUPriority = 100
+	}
+	
+	return nil
+}
+
+func formatAmount(amount *big.Int) string {
+	// Convert from smallest unit (8 decimals) to DNT
+	divisor := big.NewInt(1e8)
+	dnt := new(big.Int).Div(amount, divisor)
+	remainder := new(big.Int).Mod(amount, divisor)
+	
+	if remainder.Sign() == 0 {
+		return dnt.String()
+	}
+	
+	return fmt.Sprintf("%s.%08d", dnt.String(), remainder.Uint64())
 }
