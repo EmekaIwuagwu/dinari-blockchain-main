@@ -374,7 +374,7 @@ export DINARI_ENCRYPTION_KEY=$(openssl rand -hex 32)
 - Tag @EmekaIwuagwu for urgent questions
 
 **Security concerns?**
-- Email: security@dinari.io (if available)
+- Email: security@dinariblockchain.network (if available)
 - Report via GitHub Security Advisory
 
 **Need professional help?**

@@ -20,8 +20,8 @@ rpc:
   enabled: true
   address: "0.0.0.0:8545"
   cors_origins:
-    - "https://app.dinari.io"
-    - "https://explorer.dinari.io"
+    - "https://app.dinariblockchain.network"
+    - "https://explorer.dinariblockchain.network"
   rate_limit: 1000  # requests per minute
   max_batch_size: 100
   timeout: "30s"
@@ -145,7 +145,7 @@ monitoring:
   metrics_port: 9090
   prometheus_enabled: true
   grafana_dashboard: true
-  alert_webhook: "https://alerts.dinari.io/webhook"
+  alert_webhook: "https://alerts.dinariblockchain.network/webhook"
   
   # Health Check Intervals
   health_check_interval: "30s"
@@ -235,7 +235,7 @@ environment:
   
 # Legal & Compliance
 legal:
-  terms_of_service_url: "https://dinari.io/terms"
-  privacy_policy_url: "https://dinari.io/privacy"
+  terms_of_service_url: "https://dinariblockchain.network/terms"
+  privacy_policy_url: "https://dinariblockchain.network/privacy"
   license: "MIT"
   jurisdiction: "International"
