@@ -1,0 +1,285 @@
+# ==============================================================================
+# DinariBlockchain - Kubernetes Namespaces & RBAC
+# Production-grade security isolation for mainnet and testnet
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# NAMESPACES - Separate mainnet and testnet for security isolation
+# ------------------------------------------------------------------------------
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dinari-mainnet
+  labels:
+    name: dinari-mainnet
+    network: mainnet
+    managed-by: dinari-team
+    environment: production
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dinari-testnet
+  labels:
+    name: dinari-testnet
+    network: testnet
+    managed-by: dinari-team
+    environment: staging
+---
+# ------------------------------------------------------------------------------
+# SERVICE ACCOUNTS - Identity for node pods
+# ------------------------------------------------------------------------------
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dinari-node
+  namespace: dinari-mainnet
+  labels:
+    app: dinari-blockchain
+    network: mainnet
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dinari-node
+  namespace: dinari-testnet
+  labels:
+    app: dinari-blockchain
+    network: testnet
+---
+# ------------------------------------------------------------------------------
+# ROLES - Minimal permissions (principle of least privilege)
+# ------------------------------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dinari-node-role
+  namespace: dinari-mainnet
+rules:
+  # Read ConfigMaps (for configuration)
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+  
+  # Read Secrets (for API keys, TLS certs)
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+  
+  # Read own pod info (for self-discovery)
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+    resourceNames: []  # Limited to own pod
+  
+  # Create events (for logging/monitoring)
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dinari-node-role
+  namespace: dinari-testnet
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+# ------------------------------------------------------------------------------
+# ROLE BINDINGS - Connect ServiceAccounts to Roles
+# ------------------------------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dinari-node-rolebinding
+  namespace: dinari-mainnet
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: dinari-node-role
+subjects:
+  - kind: ServiceAccount
+    name: dinari-node
+    namespace: dinari-mainnet
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dinari-node-rolebinding
+  namespace: dinari-testnet
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: dinari-node-role
+subjects:
+  - kind: ServiceAccount
+    name: dinari-node
+    namespace: dinari-testnet
+---
+# ------------------------------------------------------------------------------
+# POD SECURITY POLICY - Enforce security constraints
+# Note: PSP is deprecated in K8s 1.25+, replace with Pod Security Standards
+# ------------------------------------------------------------------------------
+apiVersion: policy/v1beta1
+kind: PodSecurityPolicy
+metadata:
+  name: dinari-node-psp
+  annotations:
+    seccomp.security.alpha.kubernetes.io/allowedProfileNames: 'runtime/default'
+    apparmor.security.beta.kubernetes.io/allowedProfileNames: 'runtime/default'
+spec:
+  # Security hardening
+  privileged: false
+  allowPrivilegeEscalation: false
+  
+  # Drop all capabilities by default
+  requiredDropCapabilities:
+    - ALL
+  
+  # Allowed volumes (minimal)
+  volumes:
+    - 'configMap'
+    - 'secret'
+    - 'persistentVolumeClaim'
+    - 'emptyDir'
+    - 'projected'
+  
+  # Network restrictions
+  hostNetwork: false
+  hostIPC: false
+  hostPID: false
+  hostPorts:
+    - min: 8545
+      max: 8545
+    - min: 9000
+      max: 9000
+    - min: 9090
+      max: 9090
+  
+  # User restrictions
+  runAsUser:
+    rule: 'MustRunAsNonRoot'
+    ranges:
+      - min: 1000
+        max: 65535
+  
+  seLinux:
+    rule: 'RunAsAny'
+  
+  supplementalGroups:
+    rule: 'RunAsAny'
+  
+  fsGroup:
+    rule: 'RunAsAny'
+  
+  # Read-only root filesystem
+  readOnlyRootFilesystem: true
+---
+# ------------------------------------------------------------------------------
+# NETWORK POLICIES - Control network traffic
+# ------------------------------------------------------------------------------
+# Mainnet Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: dinari-mainnet-network-policy
+  namespace: dinari-mainnet
+spec:
+  podSelector:
+    matchLabels:
+      app: dinari-blockchain
+  
+  policyTypes:
+    - Ingress
+    - Egress
+  
+  ingress:
+    # Allow RPC from API gateway only
+    - from:
+        - podSelector:
+            matchLabels:
+              component: api-gateway
+      ports:
+        - protocol: TCP
+          port: 8545
+    
+    # Allow P2P from anywhere (blockchain network)
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 9000
+    
+    # Allow Prometheus scraping
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+      ports:
+        - protocol: TCP
+          port: 9090
+  
+  egress:
+    # Allow DNS
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+    
+    # Allow P2P to other nodes
+    - to:
+        - podSelector:
+            matchLabels:
+              app: dinari-blockchain
+      ports:
+        - protocol: TCP
+          port: 9000
+    
+    # Allow external P2P (blockchain network)
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 9000
+    
+    # Allow HTTPS for bootstrap peers
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 443
+---
+# Testnet Network Policy (more permissive for testing)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: dinari-testnet-network-policy
+  namespace: dinari-testnet
+spec:
+  podSelector:
+    matchLabels:
+      app: dinari-blockchain
+  
+  policyTypes:
+    - Ingress
+    - Egress
+  
+  ingress:
+    # Allow all ingress for testnet
+    - {}
+  
+  egress:
+    # Allow all egress for testnet
+    - {}

@@ -1,0 +1,332 @@
+# ==============================================================================
+# DinariBlockchain - Kubernetes Storage Configuration
+# 
+# Production-grade persistent storage for blockchain data
+# 
+# Requirements:
+# - SSD/NVMe for performance (blockchain I/O intensive)
+# - High IOPS (minimum 3000 IOPS for mainnet)
+# - Snapshot support for backups
+# - Regional replication for disaster recovery
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# STORAGE CLASSES - Define storage tiers
+# ------------------------------------------------------------------------------
+
+# High-performance storage for mainnet full nodes
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: dinari-mainnet-fast-ssd
+  labels:
+    app: dinari-blockchain
+    network: mainnet
+    tier: production
+# Cloud provider examples:
+# AWS: provisioner: ebs.csi.aws.com
+# GCP: provisioner: pd.csi.storage.gke.io
+# Azure: provisioner: disk.csi.azure.com
+provisioner: kubernetes.io/aws-ebs  # Replace with your cloud provider
+parameters:
+  type: gp3  # AWS: gp3, GCP: pd-ssd, Azure: Premium_LRS
+  iops: "10000"  # High IOPS for blockchain
+  throughput: "500"  # 500 MB/s
+  encrypted: "true"  # Always encrypt at rest
+  kmsKeyId: "REPLACE_WITH_KMS_KEY_ARN"  # Use KMS for encryption
+reclaimPolicy: Retain  # NEVER delete data automatically
+allowVolumeExpansion: true  # Allow resizing without downtime
+volumeBindingMode: WaitForFirstConsumer  # Create volume in same AZ as pod
+mountOptions:
+  - noatime  # Don't update access times (performance)
+
+---
+# Archive node storage (larger, slower acceptable)
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: dinari-mainnet-archive-ssd
+  labels:
+    app: dinari-blockchain
+    network: mainnet
+    tier: archive
+provisioner: kubernetes.io/aws-ebs
+parameters:
+  type: gp3
+  iops: "5000"  # Lower IOPS OK for archive
+  throughput: "250"
+  encrypted: "true"
+  kmsKeyId: "REPLACE_WITH_KMS_KEY_ARN"
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+mountOptions:
+  - noatime
+
+---
+# Testnet storage (cost-optimized)
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: dinari-testnet-ssd
+  labels:
+    app: dinari-blockchain
+    network: testnet
+    tier: development
+provisioner: kubernetes.io/aws-ebs
+parameters:
+  type: gp2  # Cheaper tier for testnet
+  encrypted: "true"
+reclaimPolicy: Delete  # Can delete testnet data
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+
+---
+# ------------------------------------------------------------------------------
+# PERSISTENT VOLUME CLAIMS - Storage requests
+# ------------------------------------------------------------------------------
+
+# Mainnet Full Node 1 - PVC Template (used by StatefulSet)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: blockchain-data-dinari-mainnet-node-0
+  namespace: dinari-mainnet
+  labels:
+    app: dinari-blockchain
+    network: mainnet
+    component: full-node
+    node-id: "0"
+spec:
+  accessModes:
+    - ReadWriteOnce  # Single node access (blockchain can't be shared)
+  storageClassName: dinari-mainnet-fast-ssd
+  resources:
+    requests:
+      storage: 500Gi  # Start with 500GB, expand as needed
+  # Volume snapshot for backups
+  dataSource:
+    name: mainnet-snapshot-latest  # Restore from snapshot (optional)
+    kind: VolumeSnapshot
+    apiGroup: snapshot.storage.k8s.io
+
+---
+# Mainnet Full Node 2 - PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: blockchain-data-dinari-mainnet-node-1
+  namespace: dinari-mainnet
+  labels:
+    app: dinari-blockchain
+    network: mainnet
+    component: full-node
+    node-id: "1"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: dinari-mainnet-fast-ssd
+  resources:
+    requests:
+      storage: 500Gi
+
+---
+# Mainnet Full Node 3 - PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: blockchain-data-dinari-mainnet-node-2
+  namespace: dinari-mainnet
+  labels:
+    app: dinari-blockchain
+    network: mainnet
+    component: full-node
+    node-id: "2"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: dinari-mainnet-fast-ssd
+  resources:
+    requests:
+      storage: 500Gi
+
+---
+# Mainnet Archive Node - PVC (much larger)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: blockchain-data-dinari-mainnet-archive
+  namespace: dinari-mainnet
+  labels:
+    app: dinari-blockchain
+    network: mainnet
+    component: archive-node
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: dinari-mainnet-archive-ssd
+  resources:
+    requests:
+      storage: 2Ti  # Archive nodes need much more space
+
+---
+# Testnet Node - PVC (smaller)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: blockchain-data-dinari-testnet-node-0
+  namespace: dinari-testnet
+  labels:
+    app: dinari-blockchain
+    network: testnet
+    component: full-node
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: dinari-testnet-ssd
+  resources:
+    requests:
+      storage: 100Gi  # Smaller for testnet
+
+---
+# ------------------------------------------------------------------------------
+# VOLUME SNAPSHOT CLASSES - For backups
+# ------------------------------------------------------------------------------
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: dinari-mainnet-snapshot
+  labels:
+    app: dinari-blockchain
+    network: mainnet
+driver: ebs.csi.aws.com  # Replace with your CSI driver
+deletionPolicy: Retain  # Keep snapshots even if VolumeSnapshot deleted
+parameters:
+  encrypted: "true"
+
+---
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: dinari-testnet-snapshot
+  labels:
+    app: dinari-blockchain
+    network: testnet
+driver: ebs.csi.aws.com
+deletionPolicy: Delete  # Can delete testnet snapshots
+
+---
+# ------------------------------------------------------------------------------
+# SCHEDULED VOLUME SNAPSHOTS (using external snapshot controller)
+# ------------------------------------------------------------------------------
+# Example CronJob for daily snapshots
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dinari-mainnet-snapshot-cron
+  namespace: dinari-mainnet
+  labels:
+    app: dinari-blockchain
+    component: backup
+spec:
+  # Run daily at 2 AM UTC
+  schedule: "0 2 * * *"
+  concurrencyPolicy: Forbid  # Don't run concurrent backups
+  successfulJobsHistoryLimit: 7  # Keep last 7 successful backups
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: dinari-node
+          restartPolicy: OnFailure
+          containers:
+          - name: snapshot-creator
+            image: bitnami/kubectl:latest
+            command:
+            - /bin/bash
+            - -c
+            - |
+              # Create VolumeSnapshot for each PVC
+              for i in 0 1 2; do
+                SNAPSHOT_NAME="mainnet-node-${i}-$(date +%Y%m%d-%H%M%S)"
+                PVC_NAME="blockchain-data-dinari-mainnet-node-${i}"
+                
+                kubectl create -f - <<EOF
+              apiVersion: snapshot.storage.k8s.io/v1
+              kind: VolumeSnapshot
+              metadata:
+                name: ${SNAPSHOT_NAME}
+                namespace: dinari-mainnet
+                labels:
+                  app: dinari-blockchain
+                  backup-type: automated
+                  node-id: "${i}"
+              spec:
+                volumeSnapshotClassName: dinari-mainnet-snapshot
+                source:
+                  persistentVolumeClaimName: ${PVC_NAME}
+              EOF
+                
+                echo "Created snapshot: ${SNAPSHOT_NAME}"
+              done
+              
+              # Clean up old snapshots (keep last 30 days)
+              kubectl get volumesnapshot -n dinari-mainnet \
+                -l backup-type=automated \
+                --sort-by=.metadata.creationTimestamp \
+                -o name | head -n -30 | xargs -r kubectl delete -n dinari-mainnet
+
+---
+# ------------------------------------------------------------------------------
+# STORAGE MONITORING - PVC Alerts
+# ------------------------------------------------------------------------------
+# PrometheusRule for storage alerts (requires Prometheus Operator)
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: dinari-storage-alerts
+  namespace: dinari-mainnet
+  labels:
+    app: dinari-blockchain
+    component: monitoring
+spec:
+  groups:
+  - name: storage
+    interval: 30s
+    rules:
+    # Alert when PVC is > 80% full
+    - alert: DinariPVCAlmostFull
+      expr: |
+        (kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes) > 0.8
+      for: 5m
+      labels:
+        severity: warning
+        component: storage
+      annotations:
+        summary: "PVC {{ $labels.persistentvolumeclaim }} is {{ $value | humanizePercentage }} full"
+        description: "Blockchain storage is running low. Consider expanding the volume."
+    
+    # Alert when PVC is > 90% full
+    - alert: DinariPVCCriticallyFull
+      expr: |
+        (kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes) > 0.9
+      for: 2m
+      labels:
+        severity: critical
+        component: storage
+      annotations:
+        summary: "PVC {{ $labels.persistentvolumeclaim }} is {{ $value | humanizePercentage }} full"
+        description: "URGENT: Blockchain storage critically low. Expand immediately!"
+    
+    # Alert on high I/O wait
+    - alert: DinariHighIOWait
+      expr: |
+        rate(node_disk_io_time_seconds_total[5m]) > 0.8
+      for: 10m
+      labels:
+        severity: warning
+        component: storage
+      annotations:
+        summary: "High I/O wait on {{ $labels.device }}"
+        description: "Disk I/O wait time is high. Check for performance issues."

@@ -1,0 +1,297 @@
+# DinariBlockchain Configuration
+# Production-grade blockchain for cross-border payments in Africa
+
+# Network configuration: mainnet or testnet
+network:
+  mode: "testnet"  # Change to "mainnet" for production
+  chain_id: 2      # 1 for mainnet, 2 for testnet
+
+# Node configuration
+node:
+  # Data directory for blockchain data
+  data_dir: "./data"
+  
+  # Logging configuration
+  log:
+    level: "info"           # debug, info, warn, error
+    output: "stdout"        # stdout, stderr, or file path
+    format: "json"          # json or console
+    rotation:
+      enabled: true
+      max_size_mb: 100
+      max_backups: 10
+      max_age_days: 30
+      compress: true
+
+# JSON-RPC API configuration
+rpc:
+  # Listen address
+  addr: "localhost:8545"
+  
+  # TLS/HTTPS configuration
+  tls:
+    enabled: false                    # Enable for production
+    cert_file: "/etc/dinari/cert.pem"
+    key_file: "/etc/dinari/key.pem"
+  
+  # Authentication
+  auth:
+    enabled: false                    # Enable for production
+    api_keys:
+      - "your-secret-api-key-here"    # Replace with actual keys
+    jwt_secret: "your-jwt-secret"     # Replace with actual secret
+  
+  # CORS configuration
+  cors:
+    enabled: true
+    allowed_origins:
+      - "*"  # Restrict in production: ["https://yourdomain.com"]
+    allowed_methods:
+      - "POST"
+      - "OPTIONS"
+  
+  # Rate limiting
+  rate_limit:
+    enabled: true
+    requests_per_minute: 100
+    burst_size: 20
+  
+  # Request limits
+  max_request_size_mb: 1
+  request_timeout_seconds: 30
+  read_timeout_seconds: 10
+  write_timeout_seconds: 10
+
+# P2P Network configuration
+p2p:
+  # Listen address (multiaddr format)
+  listen_addr: "/ip4/0.0.0.0/tcp/9000"
+  
+  # External address (for NAT traversal)
+  # external_addr: "/ip4/YOUR_PUBLIC_IP/tcp/9000"
+  
+  # Bootstrap peers (mainnet/testnet)
+  bootstrap_peers:
+    mainnet:
+      - "/ip4/seed1.dinarichain.io/tcp/9000/p2p/QmBootstrap1..."
+      - "/ip4/seed2.dinarichain.io/tcp/9000/p2p/QmBootstrap2..."
+    testnet:
+      - "/ip4/testnet-seed1.dinarichain.io/tcp/9000/p2p/QmTestnet1..."
+  
+  # Connection limits
+  max_peers: 50
+  max_inbound_peers: 30
+  max_outbound_peers: 20
+  min_peers: 5
+  target_peers: 20
+  
+  # DHT configuration
+  dht:
+    enabled: true
+    mode: "server"  # server or client
+  
+  # PubSub configuration
+  pubsub:
+    enabled: true
+    flood_publish: false
+  
+  # Peer reputation
+  reputation:
+    ban_threshold: -50
+    ban_duration_hours: 24
+
+# Mining configuration
+mining:
+  # Enable mining
+  enabled: false
+  
+  # Miner address (receives block rewards)
+  miner_address: ""
+  
+  # Number of CPU threads for mining
+  cpu_threads: 4
+  
+  # CPU priority (0-100, percentage of CPU to use)
+  cpu_priority: 100
+  
+  # Coinbase message (max 100 bytes)
+  coinbase_message: "Dinari - Blockchain for Africa"
+
+# Consensus configuration
+consensus:
+  # Proof of Work parameters
+  pow:
+    # Target block time in seconds
+    target_block_time: 15
+    
+    # Difficulty adjustment interval (in blocks)
+    difficulty_adjustment_interval: 120
+    
+    # Minimum difficulty
+    min_difficulty: 1000
+    
+    # Maximum difficulty
+    max_difficulty: 4294967295
+    
+    # Maximum future block time (in seconds)
+    max_future_block_time: 7200
+  
+  # Block parameters
+  block:
+    max_size_mb: 1
+    max_transactions: 5000
+  
+  # Reward parameters
+  reward:
+    initial_block_reward: 5000000000  # 50 DNT with 8 decimals
+    halving_interval: 210000          # blocks
+    max_supply: 2100000000000000      # 21M DNT with 8 decimals
+
+# Mempool configuration
+mempool:
+  # Maximum transactions in mempool
+  max_size: 10000
+  
+  # Maximum transaction size
+  max_tx_size_kb: 100
+  
+  # Transaction expiry time (in hours)
+  tx_expiry_hours: 24
+  
+  # Maximum transactions per address
+  max_tx_per_address: 100
+  
+  # Minimum fee per byte (in smallest unit)
+  min_fee_per_byte: 1
+  
+  # Replace-by-fee (RBF) minimum increase
+  rbf_min_increase_percent: 10
+
+# State database configuration
+state:
+  # Cache size (number of entries)
+  cache_size: 10000
+  
+  # Cache TTL (in minutes)
+  cache_ttl_minutes: 5
+  
+  # Checkpoint interval (in blocks)
+  checkpoint_interval: 1000
+
+# Storage configuration
+storage:
+  # BadgerDB configuration
+  badger:
+    # Value log file size (in MB)
+    value_log_file_size_mb: 256
+    
+    # Number of compactors
+    num_compactors: 2
+    
+    # Number of memtables
+    num_memtables: 3
+    
+    # Block cache size (in MB)
+    block_cache_size_mb: 100
+    
+    # Index cache size (in MB)
+    index_cache_size_mb: 100
+    
+    # Garbage collection interval (in minutes)
+    gc_interval_minutes: 10
+    
+    # Compaction interval (in minutes)
+    compaction_interval_minutes: 60
+
+# Metrics configuration
+metrics:
+  # Enable Prometheus metrics
+  enabled: true
+  
+  # Metrics server port
+  port: 9090
+  
+  # Update interval (in seconds)
+  update_interval_seconds: 30
+
+# Security configuration
+security:
+  # Maximum reorg depth
+  max_reorg_depth: 100
+  
+  # Orphan block limits
+  max_orphan_blocks: 100
+  orphan_timeout_minutes: 10
+  
+  # Peer diversity (eclipse attack prevention)
+  min_diverse_subnets: 5
+  max_peers_per_subnet: 10
+
+# Development/Testing configuration
+development:
+  # Enable development mode features
+  enabled: false
+  
+  # Faster block time for testing
+  fast_blocks: false
+  fast_block_time_seconds: 5
+  
+  # Lower difficulty for testing
+  low_difficulty: false
+  test_difficulty: 100
+  
+  # Enable debug endpoints
+  debug_endpoints: false
+
+---
+# MAINNET Configuration Template
+# Copy this section to use mainnet settings
+
+network:
+  mode: "mainnet"
+  chain_id: 1
+
+node:
+  data_dir: "/var/lib/dinari"
+  log:
+    level: "info"
+    output: "/var/log/dinari/node.log"
+    rotation:
+      enabled: true
+
+rpc:
+  addr: "0.0.0.0:8545"
+  tls:
+    enabled: true
+    cert_file: "/etc/dinari/ssl/cert.pem"
+    key_file: "/etc/dinari/ssl/key.pem"
+  auth:
+    enabled: true
+    api_keys:
+      - "REPLACE_WITH_SECURE_API_KEY"
+  cors:
+    enabled: true
+    allowed_origins:
+      - "https://yourdomain.com"
+
+p2p:
+  listen_addr: "/ip4/0.0.0.0/tcp/9000"
+  bootstrap_peers:
+    mainnet:
+      - "/ip4/seed1.dinarichain.io/tcp/9000/p2p/REPLACE_WITH_ACTUAL_PEER_ID"
+      - "/ip4/seed2.dinarichain.io/tcp/9000/p2p/REPLACE_WITH_ACTUAL_PEER_ID"
+
+mining:
+  enabled: false  # Only enable on dedicated mining nodes
+  miner_address: "REPLACE_WITH_YOUR_MINER_ADDRESS"
+  cpu_threads: 8
+
+metrics:
+  enabled: true
+  port: 9090
+
+security:
+  max_reorg_depth: 100
+
+development:
+  enabled: false

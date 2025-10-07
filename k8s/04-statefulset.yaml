@@ -1,0 +1,503 @@
+# ==============================================================================
+# DinariBlockchain - Kubernetes StatefulSets
+# 
+# Production-grade blockchain full nodes
+# StatefulSet ensures:
+# - Stable network identity
+# - Ordered deployment/scaling
+# - Persistent storage that follows the pod
+# - Predictable pod names (node-0, node-1, node-2)
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# MAINNET FULL NODES (3 replicas for HA)
+# ------------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: dinari-mainnet-node
+  namespace: dinari-mainnet
+  labels:
+    app: dinari-blockchain
+    network: mainnet
+    component: full-node
+spec:
+  serviceName: dinari-mainnet-node-headless  # Headless service for stable DNS
+  replicas: 3  # 3 nodes for high availability
+  
+  # Deployment strategy
+  podManagementPolicy: Parallel  # Start all pods simultaneously (faster startup)
+  updateStrategy:
+    type: RollingUpdate  # Update one at a time
+    rollingUpdate:
+      partition: 0  # Update all pods
+  
+  selector:
+    matchLabels:
+      app: dinari-blockchain
+      network: mainnet
+      component: full-node
+  
+  # Volume claim template (creates PVC for each pod)
+  volumeClaimTemplates:
+  - metadata:
+      name: blockchain-data
+      labels:
+        app: dinari-blockchain
+        network: mainnet
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: dinari-mainnet-fast-ssd
+      resources:
+        requests:
+          storage: 500Gi  # Blockchain data storage
+  
+  template:
+    metadata:
+      labels:
+        app: dinari-blockchain
+        network: mainnet
+        component: full-node
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Security
+      serviceAccountName: dinari-node
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532  # nobody
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      
+      # Anti-affinity - spread pods across nodes and zones
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app: dinari-blockchain
+                component: full-node
+            topologyKey: kubernetes.io/hostname  # Different nodes
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: dinari-blockchain
+                  component: full-node
+              topologyKey: topology.kubernetes.io/zone  # Different zones
+      
+      # Tolerations for dedicated node pools (optional)
+      tolerations:
+      - key: "blockchain-node"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+      
+      # Init container - setup and validation
+      initContainers:
+      - name: init-blockchain
+        image: dinari-blockchain:mainnet-latest
+        imagePullPolicy: IfNotPresent
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Initializing blockchain node..."
+          
+          # Check if data directory exists and has genesis block
+          if [ ! -f /data/genesis.lock ]; then
+            echo "First time setup - initializing genesis block..."
+            mkdir -p /data
+            cp /config/genesis.json /data/
+            touch /data/genesis.lock
+          else
+            echo "Blockchain data exists, skipping genesis initialization"
+          fi
+          
+          # Set proper permissions
+          chown -R 65532:65532 /data
+          chmod 755 /data
+          
+          # Verify configuration
+          if [ ! -f /config/config.yaml ]; then
+            echo "ERROR: Configuration file not found!"
+            exit 1
+          fi
+          
+          echo "Initialization complete"
+        volumeMounts:
+        - name: blockchain-data
+          mountPath: /data
+        - name: config
+          mountPath: /config
+        securityContext:
+          runAsUser: 0  # Init needs root to set permissions
+          allowPrivilegeEscalation: false
+      
+      # Main container - blockchain node
+      containers:
+      - name: dinari-node
+        image: dinari-blockchain:mainnet-latest
+        imagePullPolicy: IfNotPresent
+        
+        # Command with pod-specific configuration
+        command:
+        - /usr/local/bin/dinari-node
+        args:
+        - --network=mainnet
+        - --datadir=/data
+        - --config=/config/config.yaml
+        - --rpc=0.0.0.0:8545
+        - --p2p=/ip4/0.0.0.0/tcp/9000
+        - --loglevel=info
+        - --metrics
+        - --metrics-port=9090
+        # Mining enabled only for node-0 and node-1
+        - --mine=$(ENABLE_MINING)
+        - --miner=$(MINER_ADDRESS)
+        - --threads=4
+        
+        # Environment variables
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: NODE_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        # Mining only on first 2 nodes
+        - name: ENABLE_MINING
+          value: "$(shell [ $(echo $POD_NAME | grep -o '[0-9]*$') -lt 2 ] && echo 'true' || echo 'false')"
+        - name: MINER_ADDRESS
+          valueFrom:
+            secretKeyRef:
+              name: dinari-mainnet-secrets
+              key: miner-address-node-$(shell echo $POD_NAME | grep -o '[0-9]*$')
+        - name: API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: dinari-mainnet-secrets
+              key: api-key-admin
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: dinari-mainnet-secrets
+              key: jwt-secret
+        # Go runtime optimization
+        - name: GOGC
+          value: "100"  # Default GC (production uses more memory for performance)
+        - name: GOMAXPROCS
+          value: "4"
+        
+        # Ports
+        ports:
+        - name: rpc
+          containerPort: 8545
+          protocol: TCP
+        - name: p2p
+          containerPort: 9000
+          protocol: TCP
+        - name: metrics
+          containerPort: 9090
+          protocol: TCP
+        
+        # Resource limits (production grade)
+        resources:
+          requests:
+            cpu: "2"        # 2 CPU cores minimum
+            memory: "8Gi"   # 8GB RAM minimum
+          limits:
+            cpu: "4"        # 4 CPU cores maximum
+            memory: "16Gi"  # 16GB RAM maximum
+        
+        # Liveness probe - restart if unhealthy
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8545
+            scheme: HTTP
+          initialDelaySeconds: 120  # Wait 2 minutes for startup
+          periodSeconds: 30
+          timeoutSeconds: 10
+          successThreshold: 1
+          failureThreshold: 3
+        
+        # Readiness probe - remove from service if not ready
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8545
+            scheme: HTTP
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+        
+        # Startup probe - extra time for initial sync
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8545
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 30  # 5 minutes total
+        
+        # Volume mounts
+        volumeMounts:
+        - name: blockchain-data
+          mountPath: /data
+        - name: config
+          mountPath: /config
+          readOnly: true
+        - name: tls-certs
+          mountPath: /tls
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+        
+        # Security context
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 65532
+          capabilities:
+            drop:
+            - ALL
+      
+      # Volumes
+      volumes:
+      - name: config
+        configMap:
+          name: dinari-mainnet-config
+      - name: tls-certs
+        secret:
+          secretName: dinari-mainnet-tls
+      - name: tmp
+        emptyDir: {}
+      
+      # Image pull secrets (if using private registry)
+      imagePullSecrets:
+      - name: dinari-registry-credentials
+      
+      # DNS configuration
+      dnsPolicy: ClusterFirst
+      
+      # Restart policy
+      restartPolicy: Always
+      
+      # Termination grace period (allow graceful shutdown)
+      terminationGracePeriodSeconds: 300  # 5 minutes
+
+---
+# ------------------------------------------------------------------------------
+# TESTNET FULL NODES (1 replica for development)
+# ------------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: dinari-testnet-node
+  namespace: dinari-testnet
+  labels:
+    app: dinari-blockchain
+    network: testnet
+    component: full-node
+spec:
+  serviceName: dinari-testnet-node-headless
+  replicas: 1  # Single node for testnet
+  
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  
+  selector:
+    matchLabels:
+      app: dinari-blockchain
+      network: testnet
+      component: full-node
+  
+  volumeClaimTemplates:
+  - metadata:
+      name: blockchain-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: dinari-testnet-ssd
+      resources:
+        requests:
+          storage: 100Gi
+  
+  template:
+    metadata:
+      labels:
+        app: dinari-blockchain
+        network: testnet
+        component: full-node
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+    spec:
+      serviceAccountName: dinari-node
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+      
+      initContainers:
+      - name: init-blockchain
+        image: dinari-blockchain:testnet-latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Initializing testnet node..."
+          mkdir -p /data
+          if [ ! -f /data/genesis.lock ]; then
+            cp /config/genesis.json /data/
+            touch /data/genesis.lock
+          fi
+          chown -R 65532:65532 /data
+          echo "Initialization complete"
+        volumeMounts:
+        - name: blockchain-data
+          mountPath: /data
+        - name: config
+          mountPath: /config
+        securityContext:
+          runAsUser: 0
+      
+      containers:
+      - name: dinari-node
+        image: dinari-blockchain:testnet-latest
+        command:
+        - /usr/local/bin/dinari-node
+        args:
+        - --network=testnet
+        - --datadir=/data
+        - --config=/config/config.yaml
+        - --rpc=0.0.0.0:8545
+        - --p2p=/ip4/0.0.0.0/tcp/9000
+        - --loglevel=debug
+        - --metrics
+        - --mine=true
+        - --miner=$(MINER_ADDRESS)
+        - --threads=2
+        
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: MINER_ADDRESS
+          valueFrom:
+            secretKeyRef:
+              name: dinari-testnet-secrets
+              key: miner-address-node-1
+        - name: GOGC
+          value: "50"  # More frequent GC for testnet (memory constrained)
+        
+        ports:
+        - name: rpc
+          containerPort: 8545
+        - name: p2p
+          containerPort: 9000
+        - name: metrics
+          containerPort: 9090
+        
+        resources:
+          requests:
+            cpu: "1"
+            memory: "2Gi"
+          limits:
+            cpu: "2"
+            memory: "4Gi"
+        
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8545
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8545
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        
+        volumeMounts:
+        - name: blockchain-data
+          mountPath: /data
+        - name: config
+          mountPath: /config
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+        
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 65532
+          capabilities:
+            drop:
+            - ALL
+      
+      volumes:
+      - name: config
+        configMap:
+          name: dinari-testnet-config
+      - name: tmp
+        emptyDir: {}
+      
+      terminationGracePeriodSeconds: 120
+
+---
+# ------------------------------------------------------------------------------
+# POD DISRUPTION BUDGETS - Ensure availability during updates
+# ------------------------------------------------------------------------------
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: dinari-mainnet-node-pdb
+  namespace: dinari-mainnet
+  labels:
+    app: dinari-blockchain
+    network: mainnet
+spec:
+  minAvailable: 2  # Always keep at least 2 nodes running
+  selector:
+    matchLabels:
+      app: dinari-blockchain
+      network: mainnet
+      component: full-node
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: dinari-testnet-node-pdb
+  namespace: dinari-testnet
+spec:
+  minAvailable: 1  # Keep testnet node running
+  selector:
+    matchLabels:
+      app: dinari-blockchain
+      network: testnet
+      component: full-node
