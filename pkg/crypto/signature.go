@@ -108,6 +108,20 @@ func CompactSignature(data []byte, privateKey *ecdsa.PrivateKey) ([]byte, error)
 	return signature, nil
 }
 
+// SignCompact is an alias/wrapper for CompactSignature that accepts btcec.PrivateKey
+// This maintains compatibility with wallet code
+func SignCompact(data []byte, privateKey *btcec.PrivateKey) ([]byte, error) {
+	if privateKey == nil {
+		return nil, errors.New("private key is nil")
+	}
+
+	// Convert btcec private key to ecdsa private key
+	ecdsaPrivKey := privateKey.ToECDSA()
+	
+	// Use the existing CompactSignature function
+	return CompactSignature(data, ecdsaPrivKey)
+}
+
 // VerifyCompactSignature verifies a compact signature and recovers public key
 func VerifyCompactSignature(data []byte, compactSig []byte) (*ecdsa.PublicKey, bool, error) {
 	if len(compactSig) != 65 {

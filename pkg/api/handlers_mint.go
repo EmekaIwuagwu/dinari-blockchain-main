@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/ecdsa"
 	"encoding/hex"
 	"encoding/json"
 	"math/big"
@@ -47,6 +48,10 @@ func (s *Server) handleMintAFC(params json.RawMessage) (interface{}, *RPCError) 
 		}
 	}
 
+	// Convert to ECDSA types
+	ecdsaPrivKey := privKey.ToECDSA()
+	ecdsaPubKey := &ecdsaPrivKey.PublicKey
+
 	tx := &types.Transaction{
 		From:      "mint",
 		To:        req.To,
@@ -55,13 +60,13 @@ func (s *Server) handleMintAFC(params json.RawMessage) (interface{}, *RPCError) 
 		FeeDNT:    big.NewInt(0),
 		Nonce:     0,
 		Timestamp: time.Now().Unix(),
-		PublicKey: ellipticMarshal(pubKey),
+		PublicKey: ellipticMarshal(ecdsaPubKey),
 	}
 
 	tx.Hash = tx.ComputeHash()
 
 	txHashBytes := tx.Hash[:]
-	signature, err := crypto.SignData(txHashBytes, privKey)
+	signature, err := crypto.SignData(txHashBytes, ecdsaPrivKey)
 	if err != nil {
 		return nil, &RPCError{Code: -32000, Message: "failed to sign: " + err.Error()}
 	}
@@ -80,11 +85,12 @@ func (s *Server) handleMintAFC(params json.RawMessage) (interface{}, *RPCError) 
 	}, nil
 }
 
+// ellipticMarshal marshals a public key to uncompressed format
 func ellipticMarshal(pub *ecdsa.PublicKey) []byte {
-byteLen := (pub.Curve.Params().BitSize + 7) / 8
-ret := make([]byte, 1+2*byteLen)
-ret[0] = 4
-pub.X.FillBytes(ret[1 : 1+byteLen])
-pub.Y.FillBytes(ret[1+byteLen : 1+2*byteLen])
-return ret
+	byteLen := (pub.Curve.Params().BitSize + 7) / 8
+	ret := make([]byte, 1+2*byteLen)
+	ret[0] = 4
+	pub.X.FillBytes(ret[1 : 1+byteLen])
+	pub.Y.FillBytes(ret[1+byteLen : 1+2*byteLen])
+	return ret
 }

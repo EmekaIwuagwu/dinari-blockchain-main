@@ -1,10 +1,9 @@
 // cmd/dinari-node/main.go
-// Enhanced main entry point with all security features integrated
-
 package main
 
 import (
 	"context"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"log"
@@ -15,80 +14,54 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/EmekaIwuagwu/dinari-blockchain/internal/consensus"
+	"github.com/dgraph-io/badger/v4"
 	"github.com/EmekaIwuagwu/dinari-blockchain/internal/core"
 	"github.com/EmekaIwuagwu/dinari-blockchain/internal/mempool"
-	"github.com/EmekaIwuagwu/dinari-blockchain/internal/storage"
 	"github.com/EmekaIwuagwu/dinari-blockchain/internal/types"
 	"github.com/EmekaIwuagwu/dinari-blockchain/pkg/api"
 	"github.com/EmekaIwuagwu/dinari-blockchain/pkg/crypto"
 )
 
 const (
-	Version         = "1.0.0-secure"
-	DefaultDataDir  = "./data"
-	DefaultRPCPort  = "8545"
-	DefaultP2PPort  = "9000"
-	ChainID         = 1 // Mainnet
+	Version        = "1.0.0"
+	DefaultDataDir = "./data"
+	DefaultRPCPort = "8545"
+	ChainID        = 1
 )
 
 var (
-	// Command line flags
-	dataDir        = flag.String("datadir", DefaultDataDir, "Data directory for blockchain data")
-	rpcAddr        = flag.String("rpc", "localhost:"+DefaultRPCPort, "RPC server address")
-	p2pAddr        = flag.String("p2p", "/ip4/0.0.0.0/tcp/"+DefaultP2PPort, "P2P listen address")
-	minerAddr      = flag.String("miner", "", "Miner address for block rewards")
-	mine           = flag.Bool("mine", false, "Enable mining")
-	createWallet   = flag.Bool("create-wallet", false, "Create a new wallet and exit")
-	logLevel       = flag.String("loglevel", "info", "Log level (debug, info, warn, error)")
-	enableHSM      = flag.Bool("hsm", false, "Enable Hardware Security Module")
-	hsmProvider    = flag.String("hsm-provider", "software", "HSM provider (software, aws-cloudhsm, azure-keyvault)")
-	enableMultiSig = flag.Bool("multisig", false, "Enable multi-signature support for high-value transactions")
-	configFile     = flag.String("config", "", "Path to configuration file")
-	testnet        = flag.Bool("testnet", false, "Run in testnet mode")
-	production     = flag.Bool("production", false, "Run in production mode with enhanced security")
+	dataDir      = flag.String("datadir", DefaultDataDir, "Data directory for blockchain data")
+	rpcAddr      = flag.String("rpc", "localhost:"+DefaultRPCPort, "RPC server address")
+	minerAddr    = flag.String("miner", "", "Miner address for block rewards")
+	mine         = flag.Bool("mine", false, "Enable mining")
+	createWallet = flag.Bool("create-wallet", false, "Create a new wallet and exit")
 )
 
 type DinariNode struct {
-	config              *NodeConfig
-	keyManager          *crypto.KeyManager
-	hsmManager          *crypto.HSMManager
-	storage             *storage.SecureStorage
-	blockchain          *core.Blockchain
-	mempool             *mempool.EnhancedMempool
-	consensus           *consensus.EnhancedPoW
-	circuitBreaker      *core.CircuitBreaker
-	transactionValidator *core.TransactionValidator
-	rpcServer           *api.RPCServer
-	miner               *Miner
-	ctx                 context.Context
-	cancel              context.CancelFunc
+	config     *NodeConfig
+	db         *badger.DB
+	blockchain *core.Blockchain
+	mempool    *mempool.Mempool
+	rpcServer  *api.Server
+	miner      *Miner
+	ctx        context.Context
+	cancel     context.CancelFunc
 }
 
 type NodeConfig struct {
-	DataDir           string
-	RPCAddr           string
-	P2PAddr           string
-	ChainID           uint64
-	EnableMining      bool
-	MinerAddress      string
-	EnableHSM         bool
-	HSMProvider       string
-	EnableMultiSig    bool
-	Production        bool
-	Testnet           bool
-	EncryptionKey     string
-	MaxConnections    int
-	BlockTime         time.Duration
+	DataDir      string
+	RPCAddr      string
+	ChainID      uint64
+	EnableMining bool
+	MinerAddress string
 }
 
 type Miner struct {
-	address     string
-	blockchain  *core.Blockchain
-	mempool     *mempool.EnhancedMempool
-	consensus   *consensus.EnhancedPoW
-	running     bool
-	stopChan    chan struct{}
+	address    string
+	blockchain *core.Blockchain
+	mempool    *mempool.Mempool
+	running    bool
+	stopChan   chan struct{}
 }
 
 func main() {
@@ -99,30 +72,12 @@ func main() {
 		return
 	}
 
-	setupLogger(*logLevel)
-
 	config := &NodeConfig{
-		DataDir:        *dataDir,
-		RPCAddr:        *rpcAddr,
-		P2PAddr:        *p2pAddr,
-		ChainID:        ChainID,
-		EnableMining:   *mine,
-		MinerAddress:   *minerAddr,
-		EnableHSM:      *enableHSM,
-		HSMProvider:    *hsmProvider,
-		EnableMultiSig: *enableMultiSig,
-		Production:     *production,
-		Testnet:        *testnet,
-		MaxConnections: 50,
-		BlockTime:      15 * time.Second,
-	}
-
-	if config.Production {
-		log.Println("🔒 PRODUCTION MODE ENABLED - Enhanced security active")
-		config.EncryptionKey = os.Getenv("DINARI_ENCRYPTION_KEY")
-		if config.EncryptionKey == "" {
-			log.Fatal("❌ DINARI_ENCRYPTION_KEY environment variable required in production mode")
-		}
+		DataDir:      *dataDir,
+		RPCAddr:      *rpcAddr,
+		ChainID:      ChainID,
+		EnableMining: *mine,
+		MinerAddress: *minerAddr,
 	}
 
 	node, err := NewDinariNode(config)
@@ -152,123 +107,96 @@ func main() {
 func NewDinariNode(config *NodeConfig) (*DinariNode, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// Create data directory
 	if err := os.MkdirAll(config.DataDir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
 	}
 
-	log.Println("🔐 Initializing cryptography layer...")
-	keyManager, err := crypto.NewKeyManager()
+	// Initialize database
+	log.Println("💾 Initializing database...")
+	dbPath := filepath.Join(config.DataDir, "chaindata")
+	opts := badger.DefaultOptions(dbPath)
+	opts.Logger = nil
+	
+	db, err := badger.Open(opts)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create key manager: %w", err)
+		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	var hsmManager *crypto.HSMManager
-	if config.EnableHSM {
-		log.Printf("🔑 Initializing HSM (%s)...", config.HSMProvider)
-		hsmConfig := &crypto.HSMConfig{
-			Provider:    config.HSMProvider,
-			MaxSessions: 10,
-		}
-		hsmManager, err = crypto.NewHSMManager(hsmConfig, keyManager)
-		if err != nil {
-			log.Printf("⚠️  HSM initialization failed: %v. Falling back to software keys.", err)
-		} else {
-			log.Println("✅ HSM initialized successfully")
-		}
-	}
-
-	log.Println("💾 Initializing secure storage...")
-	storageConfig := &storage.StorageConfig{
-		DataDir:          filepath.Join(config.DataDir, "chaindata"),
-		EncryptionKey:    config.EncryptionKey,
-		EnableEncryption: config.Production,
-		EnableBackup:     config.Production,
-		BackupDir:        filepath.Join(config.DataDir, "backups"),
-		MaxDBSize:        100 * 1024 * 1024 * 1024, // 100GB
-		NumVersions:      1,
-		ValueLogSize:     1024 * 1024 * 1024, // 1GB
-		SyncWrites:       config.Production,
-	}
-
-	secureStorage, err := storage.NewSecureStorage(storageConfig)
+	// Initialize state with error handling
+	log.Println("🔄 Initializing state...")
+	stateDB, err := core.NewStateDB(db)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create storage: %w", err)
+		db.Close()
+		return nil, fmt.Errorf("failed to create state: %w", err)
 	}
 
-	log.Println("⛓️  Initializing blockchain core...")
-	blockchain := core.NewBlockchain(secureStorage, config.ChainID)
+	// Create genesis block
+	log.Println("⛓️  Creating genesis block...")
+	genesisBlock := createGenesisBlock()
 
-	log.Println("⚙️  Initializing consensus engine...")
-	initialDifficulty := big.NewInt(1)
-	initialDifficulty.Lsh(initialDifficulty, 240)
-	enhancedPoW := consensus.NewEnhancedPoW(initialDifficulty)
+	// Initialize blockchain
+	log.Println("⛓️  Initializing blockchain...")
+	blockchain, err := core.NewBlockchain(db, stateDB, genesisBlock)
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to create blockchain: %w", err)
+	}
 
-	log.Println("🛡️  Initializing transaction validator...")
-	stateDB := blockchain.GetStateDB()
-	txValidator := core.NewTransactionValidator(keyManager, stateDB)
-
+	// Initialize mempool
 	log.Println("🔄 Initializing mempool...")
-	mempoolConfig := &mempool.MempoolConfig{
-		MaxSize:         100000,
-		MaxTxPerAddress: 1000,
-		MinGasPrice:     1000,
-		EnableRBF:       true,
-		EnablePriority:  true,
-		CleanupInterval: 5 * time.Minute,
-	}
-	enhancedMempool := mempool.NewEnhancedMempool(txValidator, mempoolConfig)
+	mempoolInstance := mempool.NewMempool()
 
-	log.Println("🚨 Initializing circuit breaker...")
-	circuitBreakerConfig := core.DefaultCircuitBreakerConfig()
-	circuitBreakerConfig.EnableAnomalyDetection = config.Production
-	circuitBreakerConfig.EnableRateLimiting = config.Production
-	circuitBreaker := core.NewCircuitBreaker(circuitBreakerConfig)
-
-	circuitBreaker.alertManager.Subscribe(func(alert core.Alert) {
-		log.Printf("🚨 ALERT [%s]: %s - %s", alert.Severity, alert.Type, alert.Message)
-	})
-
+	// Initialize RPC server
 	log.Println("🌐 Initializing RPC server...")
-	rpcServer := api.NewRPCServer(config.RPCAddr, blockchain, enhancedMempool, keyManager)
+	serverConfig := api.DefaultConfig()
+	serverConfig.ListenAddr = config.RPCAddr
+	serverConfig.TLSEnabled = false
+	serverConfig.AuthEnabled = false
+	
+	rpcServer, err := api.NewServer(serverConfig)
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to create RPC server: %w", err)
+	}
 
+	// Set blockchain and mempool
+	rpcServer.SetBlockchain(blockchain)
+	rpcServer.SetMempool(mempoolInstance)
+
+	// Register RPC methods
+	registerRPCMethods(rpcServer)
+
+	// Initialize miner if enabled
 	var miner *Miner
 	if config.EnableMining {
 		if config.MinerAddress == "" {
+			db.Close()
 			return nil, fmt.Errorf("miner address required when mining is enabled")
 		}
 		log.Printf("⛏️  Initializing miner (address: %s)...", config.MinerAddress)
 		miner = &Miner{
 			address:    config.MinerAddress,
 			blockchain: blockchain,
-			mempool:    enhancedMempool,
-			consensus:  enhancedPoW,
+			mempool:    mempoolInstance,
 			stopChan:   make(chan struct{}),
 		}
 	}
 
 	return &DinariNode{
-		config:               config,
-		keyManager:           keyManager,
-		hsmManager:           hsmManager,
-		storage:              secureStorage,
-		blockchain:           blockchain,
-		mempool:              enhancedMempool,
-		consensus:            enhancedPoW,
-		circuitBreaker:       circuitBreaker,
-		transactionValidator: txValidator,
-		rpcServer:            rpcServer,
-		miner:                miner,
-		ctx:                  ctx,
-		cancel:               cancel,
+		config:     config,
+		db:         db,
+		blockchain: blockchain,
+		mempool:    mempoolInstance,
+		rpcServer:  rpcServer,
+		miner:      miner,
+		ctx:        ctx,
+		cancel:     cancel,
 	}, nil
 }
 
 func (node *DinariNode) Start() error {
 	log.Println("🚀 Starting Dinari node...")
-
-	if err := node.blockchain.LoadOrCreate(); err != nil {
-		return fmt.Errorf("failed to load blockchain: %w", err)
-	}
 
 	if err := node.rpcServer.Start(); err != nil {
 		return fmt.Errorf("failed to start RPC server: %w", err)
@@ -277,8 +205,6 @@ func (node *DinariNode) Start() error {
 	if node.miner != nil {
 		go node.miner.Start()
 	}
-
-	go node.monitorHealth()
 
 	log.Println("✅ Dinari node started successfully")
 	return nil
@@ -299,52 +225,13 @@ func (node *DinariNode) Stop() error {
 		}
 	}
 
-	if node.mempool != nil {
-		node.mempool.Stop()
-	}
-
-	if node.storage != nil {
-		if err := node.storage.Sync(); err != nil {
-			log.Printf("⚠️  Error syncing storage: %v", err)
-		}
-		if err := node.storage.Close(); err != nil {
-			log.Printf("⚠️  Error closing storage: %v", err)
+	if node.db != nil {
+		if err := node.db.Close(); err != nil {
+			log.Printf("⚠️  Error closing database: %v", err)
 		}
 	}
 
 	return nil
-}
-
-func (node *DinariNode) monitorHealth() {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			node.checkHealth()
-		case <-node.ctx.Done():
-			return
-		}
-	}
-}
-
-func (node *DinariNode) checkHealth() {
-	circuitState := node.circuitBreaker.GetState()
-	if circuitState != core.StateClosed {
-		log.Printf("⚠️  WARNING: Circuit breaker is %s", circuitState)
-	}
-
-	mempoolSize := node.mempool.GetSize()
-	if mempoolSize > 50000 {
-		log.Printf("⚠️  WARNING: Mempool size high (%d transactions)", mempoolSize)
-	}
-
-	metrics := node.circuitBreaker.GetMetrics()
-	if metrics.AnomaliesDetected > 0 {
-		log.Printf("🔍 Security: %d anomalies detected, %d attacks prevented", 
-			metrics.AnomaliesDetected, metrics.AttacksPrevented)
-	}
 }
 
 func (m *Miner) Start() {
@@ -368,44 +255,75 @@ func (m *Miner) Stop() {
 }
 
 func (m *Miner) mine() {
-	txs := m.mempool.GetTransactions(1000)
+	// Get pending transactions (returns []*mempool.Transaction)
+	mempoolTxs := m.mempool.GetPendingTransactions(1000)
+
+	// Convert mempool transactions to types.Transaction
+	txs := make([]*types.Transaction, 0, len(mempoolTxs))
+	for _, mTx := range mempoolTxs {
+		tx := convertMempoolTxToTypesTx(mTx)
+		txs = append(txs, tx)
+	}
 
 	currentHeight := m.blockchain.GetHeight()
-	previousHash := m.blockchain.GetBestBlockHash()
+	prevHash := m.blockchain.GetBestHash()
 
-	block := types.NewBlock(currentHeight+1, previousHash, txs, m.address)
+	// Create coinbase transaction
+	coinbaseTx := &types.Transaction{
+		From:      "COINBASE",
+		To:        m.address,
+		Amount:    big.NewInt(5000000000),
+		TokenType: string(types.TokenDNT),
+		FeeDNT:    big.NewInt(0),
+		Nonce:     0,
+		Timestamp: time.Now().Unix(),
+	}
+	coinbaseTx.Hash = coinbaseTx.ComputeHash()
 
-	difficulty := m.consensus.GetCurrentDifficulty()
-	block.Difficulty = difficulty
+	// Combine transactions
+	allTxs := append([]*types.Transaction{coinbaseTx}, txs...)
 
-	target := m.consensus.CalculateTarget(difficulty)
+	// Create block
+	block := &core.Block{
+		Header: &core.BlockHeader{
+			Version:       1,
+			Height:        currentHeight + 1,
+			PrevBlockHash: prevHash,
+			Timestamp:     time.Now().Unix(),
+			Difficulty:    1000,
+			Nonce:         0,
+		},
+		Transactions: allTxs,
+	}
 
+	// Mine the block
+	target := calculateTarget(block.Header.Difficulty)
 	startTime := time.Now()
+
 	for nonce := uint64(0); m.running; nonce++ {
-		block.Nonce = nonce
-		blockHash := block.CalculateHash()
-
-		hashInt := new(big.Int)
-		hashInt.SetString(blockHash, 16)
-
+		block.Header.Nonce = nonce
+		hash := m.blockchain.CalculateBlockHash(block.Header)
+		
+		hashInt := new(big.Int).SetBytes(hash)
 		if hashInt.Cmp(target) <= 0 {
-			block.Hash = blockHash
-			log.Printf("⛏️  Block mined! Height: %d, Hash: %s, Time: %v", 
-				block.Height, blockHash[:16]+"...", time.Since(startTime))
+			block.Header.Hash = hash
+			log.Printf("⛏️  Block mined! Height: %d, Time: %v", 
+				block.Header.Height, time.Since(startTime))
 
 			if err := m.blockchain.AddBlock(block); err != nil {
 				log.Printf("❌ Failed to add block: %v", err)
 				return
 			}
 
-			for _, tx := range txs {
-				m.mempool.RemoveTransaction(tx.Hash())
+			// Remove mined transactions from mempool
+			for _, mTx := range mempoolTxs {
+				m.mempool.RemoveTransaction(mTx.Hash)
 			}
 
 			return
 		}
 
-		if nonce%100000 == 0 {
+		if nonce%10000 == 0 {
 			select {
 			case <-m.stopChan:
 				return
@@ -415,66 +333,110 @@ func (m *Miner) mine() {
 	}
 }
 
+// convertMempoolTxToTypesTx converts mempool.Transaction to types.Transaction
+func convertMempoolTxToTypesTx(mTx *mempool.Transaction) *types.Transaction {
+	hash, _ := hex.DecodeString(mTx.Hash)
+	var hashArray [32]byte
+	copy(hashArray[:], hash)
+	
+	return &types.Transaction{
+		Hash:      hashArray,
+		From:      mTx.From,
+		To:        mTx.To,
+		Amount:    mTx.Amount,
+		TokenType: mTx.TokenType,
+		FeeDNT:    mTx.FeeDNT,
+		Nonce:     mTx.Nonce,
+		Timestamp: mTx.Timestamp,
+		Signature: mTx.Signature,
+		PublicKey: mTx.PublicKey,
+	}
+}
+
+func calculateTarget(difficulty uint32) *big.Int {
+	maxTarget := new(big.Int).Lsh(big.NewInt(1), 256)
+	target := new(big.Int).Div(maxTarget, big.NewInt(int64(difficulty)))
+	return target
+}
+
+func createGenesisBlock() *core.Block {
+	genesisTx := &types.Transaction{
+		From:      "GENESIS",
+		To:        "D1000000000000000000000000000000000000",
+		Amount:    big.NewInt(21000000 * 1e8),
+		TokenType: string(types.TokenDNT),
+		FeeDNT:    big.NewInt(0),
+		Nonce:     0,
+		Timestamp: 1704067200,
+	}
+	genesisTx.Hash = genesisTx.ComputeHash()
+
+	genesis := &core.Block{
+		Header: &core.BlockHeader{
+			Version:       1,
+			Height:        0,
+			PrevBlockHash: make([]byte, 32),
+			Timestamp:     1704067200,
+			Difficulty:    1000,
+			Nonce:         0,
+			MerkleRoot:    make([]byte, 32),
+			StateRoot:     make([]byte, 32),
+		},
+		Transactions: []*types.Transaction{genesisTx},
+	}
+
+	return genesis
+}
+
+func registerRPCMethods(server *api.Server) {
+	server.RegisterMethod("tx.send", server.HandleTxSend)
+	server.RegisterMethod("tx.get", server.HandleTxGet)
+	server.RegisterMethod("tx.getPending", server.HandleTxGetPending)
+	server.RegisterMethod("wallet.create", server.HandleWalletCreate)
+	server.RegisterMethod("wallet.balance", server.HandleWalletBalance)
+	server.RegisterMethod("chain.getBlock", server.HandleChainGetBlock)
+	server.RegisterMethod("chain.getHeight", server.HandleChainGetHeight)
+	server.RegisterMethod("chain.getStats", server.HandleChainGetStats)
+}
+
 func createNewWallet() {
 	log.Println("🔐 Creating new wallet...")
 
-	km, err := crypto.NewKeyManager()
+	privKey, err := crypto.GeneratePrivateKey()
 	if err != nil {
-		log.Fatalf("❌ Failed to create key manager: %v", err)
+		log.Fatalf("❌ Failed to generate private key: %v", err)
 	}
 
-	kp, err := km.GenerateKeyPair()
-	if err != nil {
-		log.Fatalf("❌ Failed to generate key pair: %v", err)
-	}
+	pubKey := crypto.DerivePublicKey(privKey)
+	address := crypto.PublicKeyToAddress(pubKey)
 
 	fmt.Println("\n=== New Wallet Created ===")
-	fmt.Printf("Address:     %s\n", kp.Address)
-	fmt.Printf("Public Key:  %x\n", crypto.SerializePublicKey(kp.PublicKey))
-	fmt.Printf("Private Key: %x\n", crypto.SerializePrivateKey(kp.PrivateKey))
+	fmt.Printf("Address:     %s\n", address)
+	fmt.Printf("Private Key: %s\n", crypto.PrivateKeyToHex(privKey))
 	fmt.Println("\n⚠️  IMPORTANT: Save your private key securely!")
-	fmt.Println("⚠️  Never share your private key with anyone!")
 	fmt.Println("===========================\n")
 }
 
 func printBanner(config *NodeConfig) {
 	fmt.Println("\n╔════════════════════════════════════════════════════════╗")
-	fmt.Println("║           DINARI BLOCKCHAIN NODE v" + Version + "            ║")
+	fmt.Println("║           DINARI BLOCKCHAIN NODE v" + Version + "               ║")
 	fmt.Println("╠════════════════════════════════════════════════════════╣")
 	fmt.Printf("║ RPC Server:      %-37s ║\n", config.RPCAddr)
-	fmt.Printf("║ P2P Address:     %-37s ║\n", config.P2PAddr)
 	fmt.Printf("║ Chain ID:        %-37d ║\n", config.ChainID)
 	fmt.Printf("║ Data Directory:  %-37s ║\n", config.DataDir)
 	
-	if config.Production {
-		fmt.Println("║ Mode:            PRODUCTION (Enhanced Security)        ║")
-	} else if config.Testnet {
-		fmt.Println("║ Mode:            TESTNET                               ║")
-	} else {
-		fmt.Println("║ Mode:            DEVELOPMENT                           ║")
-	}
-	
 	if config.EnableMining {
-		fmt.Printf("║ Mining:          ENABLED (%-28s) ║\n", config.MinerAddress[:28])
+		addrLen := len(config.MinerAddress)
+		if addrLen > 28 {
+			addrLen = 28
+		}
+		fmt.Printf("║ Mining:          ENABLED (%-28s) ║\n", config.MinerAddress[:addrLen])
 	} else {
 		fmt.Println("║ Mining:          DISABLED                              ║")
-	}
-	
-	if config.EnableHSM {
-		fmt.Printf("║ HSM:             ENABLED (%-28s) ║\n", config.HSMProvider)
-	}
-	
-	if config.EnableMultiSig {
-		fmt.Println("║ Multi-Sig:       ENABLED                               ║")
 	}
 	
 	fmt.Println("╚════════════════════════════════════════════════════════╝")
 	fmt.Println()
 	log.Println("✅ Node is running. Press Ctrl+C to stop.")
 	fmt.Println()
-}
-
-func setupLogger(level string) {
-	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
-	log.SetOutput(os.Stdout)
 }

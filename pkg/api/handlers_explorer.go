@@ -145,11 +145,11 @@ func (s *Server) handleChainSearch(params json.RawMessage) (interface{}, *RPCErr
 		if len(hashStr) >= 16 {
 			hashBytes, err := hex.DecodeString(hashStr)
 			if err == nil && len(hashBytes) == 32 {
-				tx, found := s.mempool.GetTransaction(hex.EncodeToString(hashBytes))
-				if found {
+				tx, err := s.mempool.GetTransaction(hex.EncodeToString(hashBytes))
+				if err == nil {
 					return map[string]interface{}{
 						"type":   "transaction",
-						"result": formatTransaction(tx),
+						"result": formatMempoolTransaction(tx), // Use the mempool formatter
 					}, nil
 				}
 			}

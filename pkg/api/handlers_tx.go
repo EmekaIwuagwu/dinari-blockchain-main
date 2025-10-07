@@ -1,7 +1,6 @@
 package api
 
 import (
-	"crypto/ecdsa"
 	"encoding/hex"
 	"encoding/json"
 	"math/big"
@@ -41,7 +40,9 @@ func (s *Server) handleTxSend(params json.RawMessage) (interface{}, *RPCError) {
 		return nil, &RPCError{Code: -32602, Message: "invalid private key"}
 	}
 
-	pubKey := crypto.DerivePublicKey(privKey)
+	// Convert to ECDSA types
+	ecdsaPrivKey := privKey.ToECDSA()
+	ecdsaPubKey := &ecdsaPrivKey.PublicKey
 	
 	tx := &types.Transaction{
 		From:      req.From,
@@ -51,11 +52,11 @@ func (s *Server) handleTxSend(params json.RawMessage) (interface{}, *RPCError) {
 		FeeDNT:    fee,
 		Nonce:     0,
 		Timestamp: time.Now().Unix(),
-		PublicKey: ellipticMarshal(pubKey),
+		PublicKey: ellipticMarshal(ecdsaPubKey),
 	}
 
 	tx.Hash = tx.ComputeHash()
-	signature, err := crypto.SignData(tx.Hash[:], privKey)
+	signature, err := crypto.SignData(tx.Hash[:], ecdsaPrivKey)
 	if err != nil {
 		return nil, &RPCError{Code: -32000, Message: "failed to sign: " + err.Error()}
 	}
@@ -111,7 +112,7 @@ func (s *Server) handleTxGetPending(params json.RawMessage) (interface{}, *RPCEr
 		req.Limit = 20
 	}
 
-	allTxs := s.mempool.GetAllTransactions()
+	allTxs := s.mempool.GetPendingTransactions(req.Limit * 2)
 	
 	limit := req.Limit
 	if len(allTxs) < limit {
@@ -170,12 +171,4 @@ func (s *Server) handleTxGetStats(params json.RawMessage) (interface{}, *RPCErro
 	return stats, nil
 }
 
-// ellipticMarshal marshals a public key to uncompressed format
-func ellipticMarshal(pub *ecdsa.PublicKey) []byte {
-	byteLen := (pub.Curve.Params().BitSize + 7) / 8
-	ret := make([]byte, 1+2*byteLen)
-	ret[0] = 4
-	pub.X.FillBytes(ret[1 : 1+byteLen])
-	pub.Y.FillBytes(ret[1+byteLen : 1+2*byteLen])
-	return ret
-}
+

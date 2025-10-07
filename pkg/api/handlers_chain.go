@@ -1,15 +1,10 @@
 package api
 
 import (
-	"strconv"
-	"fmt"
-)
-
-import (
 	"encoding/hex"
 	"encoding/json"
+	"strconv"
 	
-	"github.com/EmekaIwuagwu/dinari-blockchain/internal/types"
 	"github.com/EmekaIwuagwu/dinari-blockchain/internal/core"
 )
 

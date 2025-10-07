@@ -111,7 +111,7 @@ type OrphanBlock struct {
 // Blockchain manages the blockchain state
 type Blockchain struct {
 	db    *badger.DB
-	state *StateDB
+	State *StateDB
 	
 	// Current chain state
 	chainState *ChainState
@@ -159,7 +159,7 @@ func NewBlockchain(db *badger.DB, state *StateDB, genesisBlock *Block) (*Blockch
 	
 	bc := &Blockchain{
 		db:           db,
-		state:        state,
+		State:        state,
 		orphans:      make(map[string]*OrphanBlock),
 		blockCache:   make(map[uint64]*Block),
 		maxCacheSize: 100,
@@ -172,6 +172,10 @@ func NewBlockchain(db *badger.DB, state *StateDB, genesisBlock *Block) (*Blockch
 	}
 	
 	return bc, nil
+}
+
+func (bc *Blockchain) GetState() *StateDB {
+    return bc.State
 }
 
 // initialize sets up the blockchain (genesis or load existing)
@@ -203,6 +207,11 @@ func (bc *Blockchain) initialize() error {
 	
 	// Load chain state
 	return bc.loadChainState()
+}
+
+// CalculateBlockHash is a public wrapper for calculateBlockHash
+func (bc *Blockchain) CalculateBlockHash(header *BlockHeader) []byte {
+	return bc.calculateBlockHash(header)
 }
 
 // createGenesis creates and stores the genesis block
@@ -439,7 +448,7 @@ func (bc *Blockchain) validateTransaction(tx *types.Transaction) error {
 	// and state DB for balance/nonce checks
 	
 	// Check sender balance
-	balance, err := bc.state.GetBalance(tx.From, TokenType(tx.TokenType))
+	balance, err := bc.State.GetBalance(tx.From, TokenType(tx.TokenType))
 	if err != nil {
 		return err
 	}
@@ -450,7 +459,7 @@ func (bc *Blockchain) validateTransaction(tx *types.Transaction) error {
 	}
 	
 	// Check nonce
-	expectedNonce, err := bc.state.GetNonce(tx.From)
+	expectedNonce, err := bc.State.GetNonce(tx.From)
 	if err != nil {
 		return err
 	}
@@ -485,20 +494,20 @@ func (bc *Blockchain) validateProofOfWork(header *BlockHeader) bool {
 // addBlockToMainChain adds a block to the main chain and updates state
 func (bc *Blockchain) addBlockToMainChain(block *Block) error {
 	// Create state checkpoint
-	checkpointID := bc.state.Checkpoint()
+	checkpointID := bc.State.Checkpoint()
 	
 	// Apply transactions to state
 	for _, tx := range block.Transactions {
 		if err := bc.applyTransaction(tx); err != nil {
 			// Rollback state on error
-			bc.state.RevertToCheckpoint(checkpointID)
+			bc.State.RevertToCheckpoint(checkpointID)
 			return fmt.Errorf("failed to apply transaction: %w", err)
 		}
 	}
 	
 	// Commit state changes
-	if err := bc.state.Commit(); err != nil {
-		bc.state.RevertToCheckpoint(checkpointID)
+	if err := bc.State.Commit(); err != nil {
+		bc.State.RevertToCheckpoint(checkpointID)
 		return fmt.Errorf("failed to commit state: %w", err)
 	}
 	
@@ -556,12 +565,12 @@ func (bc *Blockchain) reorganize(newTip *Block) error {
 	fmt.Printf("🔄 Reorganizing: reverting %d blocks, applying %d blocks\n", len(oldBlocks), len(newBlocks))
 	
 	// Create checkpoint before reorg
-	checkpointID := bc.state.Checkpoint()
+	checkpointID := bc.State.Checkpoint()
 	
 	// Revert old blocks
 	for i := len(oldBlocks) - 1; i >= 0; i-- {
 		if err := bc.revertBlock(oldBlocks[i]); err != nil {
-			bc.state.RevertToCheckpoint(checkpointID)
+			bc.State.RevertToCheckpoint(checkpointID)
 			return fmt.Errorf("failed to revert block: %w", err)
 		}
 	}
@@ -569,14 +578,14 @@ func (bc *Blockchain) reorganize(newTip *Block) error {
 	// Apply new blocks
 	for _, block := range newBlocks {
 		if err := bc.applyBlockTransactions(block); err != nil {
-			bc.state.RevertToCheckpoint(checkpointID)
+			bc.State.RevertToCheckpoint(checkpointID)
 			return fmt.Errorf("failed to apply new block: %w", err)
 		}
 	}
 	
 	// Commit state
-	if err := bc.state.Commit(); err != nil {
-		bc.state.RevertToCheckpoint(checkpointID)
+	if err := bc.State.Commit(); err != nil {
+		bc.State.RevertToCheckpoint(checkpointID)
 		return fmt.Errorf("failed to commit reorg state: %w", err)
 	}
 	
