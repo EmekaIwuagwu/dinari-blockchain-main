@@ -10,7 +10,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/sha512"
-	"encoding/hex"
+
 	"errors"
 	"fmt"
 	"io"

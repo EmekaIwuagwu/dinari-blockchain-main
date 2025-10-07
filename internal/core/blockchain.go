@@ -11,7 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dgraph-io/badger/v3"
+	"github.com/dgraph-io/badger/v4"
+	"github.com/EmekaIwuagwu/dinari-blockchain/internal/types"
 )
 
 const (
@@ -76,7 +77,7 @@ var (
 // Block represents a blockchain block
 type Block struct {
 	Header       *BlockHeader   `json:"header"`
-	Transactions []*Transaction `json:"transactions"`
+	Transactions []*types.Transaction `json:"transactions"`
 }
 
 // BlockHeader contains block metadata
@@ -399,7 +400,7 @@ func (bc *Blockchain) validateBlockTransactions(block *Block) error {
 	seenHashes := make(map[string]bool)
 	for i, tx := range block.Transactions[1:] {
 		// Check for duplicate transactions
-		txHash := string(tx.Hash)
+		txHash := string(tx.Hash[:])
 		if seenHashes[txHash] {
 			return fmt.Errorf("duplicate transaction at index %d", i+1)
 		}
@@ -415,7 +416,7 @@ func (bc *Blockchain) validateBlockTransactions(block *Block) error {
 }
 
 // validateCoinbase validates the coinbase transaction
-func (bc *Blockchain) validateCoinbase(tx *Transaction, height uint64) error {
+func (bc *Blockchain) validateCoinbase(tx *types.Transaction, height uint64) error {
 	// Calculate expected block reward
 	expectedReward := bc.calculateBlockReward(height)
 	
@@ -433,7 +434,7 @@ func (bc *Blockchain) validateCoinbase(tx *Transaction, height uint64) error {
 }
 
 // validateTransaction validates a single transaction
-func (bc *Blockchain) validateTransaction(tx *Transaction) error {
+func (bc *Blockchain) validateTransaction(tx *types.Transaction) error {
 	// This should call crypto package for signature verification
 	// and state DB for balance/nonce checks
 	
@@ -542,7 +543,7 @@ func (bc *Blockchain) handleSideChain(block *Block) error {
 // reorganize performs a blockchain reorganization
 func (bc *Blockchain) reorganize(newTip *Block) error {
 	// Find common ancestor
-	commonAncestor, oldBlocks, newBlocks, err := bc.findReorgPath(newTip)
+	_, oldBlocks, newBlocks, err := bc.findReorgPath(newTip)
 	if err != nil {
 		return fmt.Errorf("failed to find reorg path: %w", err)
 	}
@@ -614,7 +615,7 @@ func (bc *Blockchain) calculateBlockHash(header *BlockHeader) []byte {
 	return second[:]
 }
 
-func (bc *Blockchain) calculateMerkleRoot(txs []*Transaction) []byte {
+func (bc *Blockchain) calculateMerkleRoot(txs []*types.Transaction) []byte {
 	if len(txs) == 0 {
 		return make([]byte, 32)
 	}
@@ -622,7 +623,7 @@ func (bc *Blockchain) calculateMerkleRoot(txs []*Transaction) []byte {
 	// Build merkle tree
 	var hashes [][]byte
 	for _, tx := range txs {
-		hashes = append(hashes, tx.Hash)
+		hashes = append(hashes, tx.Hash[:])
 	}
 	
 	// Iteratively hash pairs until we have one root
@@ -698,7 +699,7 @@ func (bc *Blockchain) calculateBlockSize(block *Block) int {
 	return len(data)
 }
 
-func (bc *Blockchain) applyTransaction(tx *Transaction) error {
+func (bc *Blockchain) applyTransaction(tx *types.Transaction) error {
 	// Apply transaction to state
 	// (This would integrate with state.Transfer)
 	return nil

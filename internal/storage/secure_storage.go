@@ -1,6 +1,5 @@
 // internal/storage/secure_storage.go
 // Encrypted database layer with backup and recovery for production systems
-
 package storage
 
 import (
@@ -9,239 +8,148 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
-	"github.com/dgraph-io/badger/v3"
-	"golang.org/x/crypto/argon2"
+	"github.com/dgraph-io/badger/v4"
 )
 
 const (
-	EncryptionEnabled       = true
-	CompressionEnabled      = true
-	BackupInterval          = 6 * time.Hour
-	BackupRetentionDays     = 30
-	MaxValueSize            = 10 * 1024 * 1024 // 10MB
-	GCInterval              = 5 * time.Minute
-	SyncWrites              = true // Force sync for critical data
-	MaxBatchSize            = 10000
-	MaxBatchDelay           = 100 * time.Millisecond
+	EncryptionEnabled   = true
+	CompressionEnabled  = true
+	BackupInterval      = 6 * time.Hour
+	BackupRetentionDays = 30
+	MaxValueSize        = 10 * 1024 * 1024 // 10MB
+	GCInterval          = 5 * time.Minute
+	SyncWrites          = true // Force sync for critical data
+	// Note: MaxBatchSize is already defined in db.go
+	MaxBatchDelaySecure = 100 * time.Millisecond
 )
 
+// Secure storage specific errors (don't duplicate from db.go)
 var (
-	ErrKeyNotFound       = errors.New("key not found")
-	ErrValueTooLarge     = errors.New("value exceeds maximum size")
-	ErrEncryptionFailed  = errors.New("encryption failed")
-	ErrDecryptionFailed  = errors.New("decryption failed")
-	ErrBackupFailed      = errors.New("backup failed")
-	ErrCorruptedData     = errors.New("data corruption detected")
-	ErrDatabaseClosed    = errors.New("database is closed")
+	ErrValueTooLarge    = errors.New("value exceeds maximum size")
+	ErrEncryptionFailed = errors.New("encryption failed")
+	ErrDecryptionFailed = errors.New("decryption failed")
+	ErrBackupFailed     = errors.New("backup failed")
+	ErrCorruptedData    = errors.New("data corruption detected")
 )
 
 type SecureStorage struct {
-	db              *badger.DB
-	encryptionKey   []byte
-	backupManager   *BackupManager
-	integrityCheck  *IntegrityChecker
-	metricsCollector *StorageMetrics
-	gcManager       *GarbageCollector
-	mu              sync.RWMutex
-	closed          bool
-}
-
-type StorageConfig struct {
-	DataDir         string
-	EncryptionKey   string
-	EnableEncryption bool
-	EnableBackup    bool
-	BackupDir       string
-	MaxDBSize       int64
-	NumVersions     int
-	ValueLogSize    int64
-	SyncWrites      bool
+	db             *badger.DB
+	encryptionKey  []byte
+	backupManager  *BackupManager
+	integrityCheck *IntegrityChecker
+	mu             sync.RWMutex
+	closed         bool
 }
 
 type BackupManager struct {
-	backupDir       string
-	lastBackup      time.Time
-	backupInterval  time.Duration
-	retentionDays   int
-	mu              sync.Mutex
-}
-
-type BackupMetadata struct {
-	Timestamp       time.Time
-	DatabaseSize    int64
-	EntryCount      uint64
-	Checksum        string
-	Version         string
+	backupDir     string
+	interval      time.Duration
+	retention     int // days
+	lastBackup    time.Time
+	backupRunning bool
+	mu            sync.Mutex
 }
 
 type IntegrityChecker struct {
-	checksums       map[string]string
-	lastCheck       time.Time
-	corruptionCount uint64
-	mu              sync.RWMutex
+	checksums map[string]string // key -> checksum
+	mu        sync.RWMutex
 }
 
-type StorageMetrics struct {
-	TotalReads      uint64
-	TotalWrites     uint64
-	TotalDeletes    uint64
-	BytesRead       uint64
-	BytesWritten    uint64
-	ErrorCount      uint64
-	AvgReadLatency  time.Duration
-	AvgWriteLatency time.Duration
-	mu              sync.RWMutex
-}
-
-type GarbageCollector struct {
-	db              *badger.DB
-	interval        time.Duration
-	lastGC          time.Time
-	gcCount         uint64
-	reclaimedSpace  uint64
-	stopChan        chan struct{}
-	mu              sync.Mutex
-}
-
-type StorageTransaction struct {
-	txn             *badger.Txn
-	operations      []Operation
-	readOnly        bool
-	startTime       time.Time
-}
-
-type Operation struct {
-	Type    string
-	Key     string
-	Value   []byte
-}
-
-func NewSecureStorage(config *StorageConfig) (*SecureStorage, error) {
-	if config == nil {
-		return nil, errors.New("config cannot be nil")
+// NewSecureStorage creates a new encrypted storage instance
+func NewSecureStorage(dataDir string, encryptionKey []byte) (*SecureStorage, error) {
+	if len(encryptionKey) != 32 {
+		return nil, errors.New("encryption key must be 32 bytes")
 	}
 
-	opts := badger.DefaultOptions(config.DataDir)
-	opts.SyncWrites = config.SyncWrites
-	opts.NumVersionsToKeep = config.NumVersions
-	opts.ValueLogFileSize = config.ValueLogSize
-	opts.Logger = nil // Disable badger's default logger
+	// Create badger options for v4
+	opts := badger.DefaultOptions(dataDir)
+	opts = opts.WithLoggingLevel(badger.WARNING)
+	opts = opts.WithSyncWrites(SyncWrites)
 
+	
+	// Open database using v4 API
 	db, err := badger.Open(opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	var encKey []byte
-	if config.EnableEncryption && config.EncryptionKey != "" {
-		encKey = deriveEncryptionKey(config.EncryptionKey)
+	backupDir := filepath.Join(dataDir, "backups")
+	if err := os.MkdirAll(backupDir, 0700); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to create backup directory: %w", err)
 	}
 
-	storage := &SecureStorage{
-		db:               db,
-		encryptionKey:    encKey,
-		backupManager:    NewBackupManager(config.BackupDir, BackupInterval, BackupRetentionDays),
-		integrityCheck:   NewIntegrityChecker(),
-		metricsCollector: NewStorageMetrics(),
-		gcManager:        NewGarbageCollector(db, GCInterval),
-		closed:           false,
+	ss := &SecureStorage{
+		db:            db,
+		encryptionKey: encryptionKey,
+		backupManager: &BackupManager{
+			backupDir: backupDir,
+			interval:  BackupInterval,
+			retention: BackupRetentionDays,
+		},
+		integrityCheck: &IntegrityChecker{
+			checksums: make(map[string]string),
+		},
 	}
 
-	if config.EnableBackup {
-		go storage.backupManager.StartBackupScheduler(storage)
-	}
+	// Start background tasks
+	go ss.startBackupRoutine()
+	go ss.startGarbageCollection()
 
-	go storage.gcManager.Start()
-
-	return storage, nil
+	return ss, nil
 }
 
-func deriveEncryptionKey(passphrase string) []byte {
-	salt := []byte("dinari-blockchain-encryption-salt-v1")
-	return argon2.IDKey([]byte(passphrase), salt, 3, 64*1024, 4, 32)
-}
-
-func NewBackupManager(backupDir string, interval time.Duration, retentionDays int) *BackupManager {
-	return &BackupManager{
-		backupDir:      backupDir,
-		backupInterval: interval,
-		retentionDays:  retentionDays,
-	}
-}
-
-func NewIntegrityChecker() *IntegrityChecker {
-	return &IntegrityChecker{
-		checksums: make(map[string]string),
-	}
-}
-
-func NewStorageMetrics() *StorageMetrics {
-	return &StorageMetrics{}
-}
-
-func NewGarbageCollector(db *badger.DB, interval time.Duration) *GarbageCollector {
-	return &GarbageCollector{
-		db:       db,
-		interval: interval,
-		stopChan: make(chan struct{}),
-	}
-}
-
+// Put stores encrypted data
 func (ss *SecureStorage) Put(key, value []byte) error {
+	ss.mu.RLock()
 	if ss.closed {
+		ss.mu.RUnlock()
 		return ErrDatabaseClosed
 	}
+	ss.mu.RUnlock()
 
 	if len(value) > MaxValueSize {
 		return ErrValueTooLarge
 	}
 
-	startTime := time.Now()
-	defer func() {
-		ss.metricsCollector.RecordWrite(len(value), time.Since(startTime))
-	}()
-
+	// Encrypt the value
 	encryptedValue, err := ss.encrypt(value)
 	if err != nil {
-		ss.metricsCollector.RecordError()
 		return fmt.Errorf("encryption failed: %w", err)
 	}
 
+	// Store checksum
 	checksum := ss.calculateChecksum(value)
-	ss.integrityCheck.StoreChecksum(string(key), checksum)
+	ss.integrityCheck.mu.Lock()
+	ss.integrityCheck.checksums[string(key)] = checksum
+	ss.integrityCheck.mu.Unlock()
 
+	// Write to database
 	err = ss.db.Update(func(txn *badger.Txn) error {
 		return txn.Set(key, encryptedValue)
 	})
 
-	if err != nil {
-		ss.metricsCollector.RecordError()
-		return fmt.Errorf("database write failed: %w", err)
-	}
-
-	return nil
+	return err
 }
 
+// Get retrieves and decrypts data
 func (ss *SecureStorage) Get(key []byte) ([]byte, error) {
+	ss.mu.RLock()
 	if ss.closed {
+		ss.mu.RUnlock()
 		return nil, ErrDatabaseClosed
 	}
-
-	startTime := time.Now()
-	defer func() {
-		ss.metricsCollector.RecordRead(0, time.Since(startTime))
-	}()
+	ss.mu.RUnlock()
 
 	var encryptedValue []byte
-
 	err := ss.db.View(func(txn *badger.Txn) error {
 		item, err := txn.Get(key)
 		if err != nil {
@@ -254,166 +162,63 @@ func (ss *SecureStorage) Get(key []byte) ([]byte, error) {
 		})
 	})
 
+	if err == badger.ErrKeyNotFound {
+		return nil, ErrKeyNotFound
+	}
 	if err != nil {
-		if err == badger.ErrKeyNotFound {
-			return nil, ErrKeyNotFound
-		}
-		ss.metricsCollector.RecordError()
 		return nil, err
 	}
 
-	value, err := ss.decrypt(encryptedValue)
+	// Decrypt
+	decryptedValue, err := ss.decrypt(encryptedValue)
 	if err != nil {
-		ss.metricsCollector.RecordError()
 		return nil, fmt.Errorf("decryption failed: %w", err)
 	}
 
-	if err := ss.integrityCheck.VerifyChecksum(string(key), value); err != nil {
-		ss.metricsCollector.RecordError()
+	// Verify integrity
+	expectedChecksum := ss.integrityCheck.getChecksum(string(key))
+	actualChecksum := ss.calculateChecksum(decryptedValue)
+	if expectedChecksum != "" && expectedChecksum != actualChecksum {
 		return nil, ErrCorruptedData
 	}
 
-	ss.metricsCollector.mu.Lock()
-	ss.metricsCollector.BytesRead += uint64(len(value))
-	ss.metricsCollector.mu.Unlock()
-
-	return value, nil
+	return decryptedValue, nil
 }
 
+// Delete removes a key
 func (ss *SecureStorage) Delete(key []byte) error {
+	ss.mu.RLock()
 	if ss.closed {
+		ss.mu.RUnlock()
 		return ErrDatabaseClosed
 	}
+	ss.mu.RUnlock()
 
-	err := ss.db.Update(func(txn *badger.Txn) error {
+	// Remove checksum
+	ss.integrityCheck.mu.Lock()
+	delete(ss.integrityCheck.checksums, string(key))
+	ss.integrityCheck.mu.Unlock()
+
+	return ss.db.Update(func(txn *badger.Txn) error {
 		return txn.Delete(key)
 	})
-
-	if err != nil {
-		ss.metricsCollector.RecordError()
-		return err
-	}
-
-	ss.integrityCheck.RemoveChecksum(string(key))
-	ss.metricsCollector.RecordDelete()
-
-	return nil
 }
 
-func (ss *SecureStorage) BatchPut(entries map[string][]byte) error {
+// Close closes the database
+func (ss *SecureStorage) Close() error {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+
 	if ss.closed {
-		return ErrDatabaseClosed
-	}
-
-	wb := ss.db.NewWriteBatch()
-	defer wb.Cancel()
-
-	for key, value := range entries {
-		if len(value) > MaxValueSize {
-			return ErrValueTooLarge
-		}
-
-		encryptedValue, err := ss.encrypt(value)
-		if err != nil {
-			return fmt.Errorf("encryption failed for key %s: %w", key, err)
-		}
-
-		checksum := ss.calculateChecksum(value)
-		ss.integrityCheck.StoreChecksum(key, checksum)
-
-		if err := wb.Set([]byte(key), encryptedValue); err != nil {
-			return err
-		}
-	}
-
-	if err := wb.Flush(); err != nil {
-		ss.metricsCollector.RecordError()
-		return err
-	}
-
-	ss.metricsCollector.mu.Lock()
-	ss.metricsCollector.TotalWrites += uint64(len(entries))
-	ss.metricsCollector.mu.Unlock()
-
-	return nil
-}
-
-func (ss *SecureStorage) BeginTransaction(readOnly bool) (*StorageTransaction, error) {
-	if ss.closed {
-		return nil, ErrDatabaseClosed
-	}
-
-	var txn *badger.Txn
-	if readOnly {
-		txn = ss.db.NewTransaction(false)
-	} else {
-		txn = ss.db.NewTransaction(true)
-	}
-
-	return &StorageTransaction{
-		txn:       txn,
-		operations: make([]Operation, 0),
-		readOnly:  readOnly,
-		startTime: time.Now(),
-	}, nil
-}
-
-func (st *StorageTransaction) Put(key, value []byte) error {
-	if st.readOnly {
-		return errors.New("cannot write in read-only transaction")
-	}
-
-	st.operations = append(st.operations, Operation{
-		Type:  "PUT",
-		Key:   string(key),
-		Value: value,
-	})
-
-	return st.txn.Set(key, value)
-}
-
-func (st *StorageTransaction) Get(key []byte) ([]byte, error) {
-	item, err := st.txn.Get(key)
-	if err != nil {
-		return nil, err
-	}
-
-	var value []byte
-	err = item.Value(func(val []byte) error {
-		value = append([]byte{}, val...)
 		return nil
-	})
-
-	return value, err
-}
-
-func (st *StorageTransaction) Delete(key []byte) error {
-	if st.readOnly {
-		return errors.New("cannot delete in read-only transaction")
 	}
 
-	st.operations = append(st.operations, Operation{
-		Type: "DELETE",
-		Key:  string(key),
-	})
-
-	return st.txn.Delete(key)
+	ss.closed = true
+	return ss.db.Close()
 }
 
-func (st *StorageTransaction) Commit() error {
-	defer st.txn.Discard()
-	return st.txn.Commit()
-}
-
-func (st *StorageTransaction) Rollback() {
-	st.txn.Discard()
-}
-
-func (ss *SecureStorage) encrypt(data []byte) ([]byte, error) {
-	if !EncryptionEnabled || len(ss.encryptionKey) == 0 {
-		return data, nil
-	}
-
+// encrypt encrypts data using AES-256-GCM
+func (ss *SecureStorage) encrypt(plaintext []byte) ([]byte, error) {
 	block, err := aes.NewCipher(ss.encryptionKey)
 	if err != nil {
 		return nil, err
@@ -429,15 +234,12 @@ func (ss *SecureStorage) encrypt(data []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	ciphertext := gcm.Seal(nonce, nonce, data, nil)
+	ciphertext := gcm.Seal(nonce, nonce, plaintext, nil)
 	return ciphertext, nil
 }
 
-func (ss *SecureStorage) decrypt(data []byte) ([]byte, error) {
-	if !EncryptionEnabled || len(ss.encryptionKey) == 0 {
-		return data, nil
-	}
-
+// decrypt decrypts AES-256-GCM encrypted data
+func (ss *SecureStorage) decrypt(ciphertext []byte) ([]byte, error) {
 	block, err := aes.NewCipher(ss.encryptionKey)
 	if err != nil {
 		return nil, err
@@ -449,11 +251,11 @@ func (ss *SecureStorage) decrypt(data []byte) ([]byte, error) {
 	}
 
 	nonceSize := gcm.NonceSize()
-	if len(data) < nonceSize {
+	if len(ciphertext) < nonceSize {
 		return nil, ErrDecryptionFailed
 	}
 
-	nonce, ciphertext := data[:nonceSize], data[nonceSize:]
+	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
 		return nil, ErrDecryptionFailed
@@ -462,203 +264,146 @@ func (ss *SecureStorage) decrypt(data []byte) ([]byte, error) {
 	return plaintext, nil
 }
 
+// calculateChecksum creates a SHA-256 checksum
 func (ss *SecureStorage) calculateChecksum(data []byte) string {
 	hash := sha256.Sum256(data)
 	return hex.EncodeToString(hash[:])
 }
 
-func (ic *IntegrityChecker) StoreChecksum(key, checksum string) {
-	ic.mu.Lock()
-	defer ic.mu.Unlock()
-	ic.checksums[key] = checksum
-}
-
-func (ic *IntegrityChecker) VerifyChecksum(key string, data []byte) error {
+// getChecksum retrieves stored checksum
+func (ic *IntegrityChecker) getChecksum(key string) string {
 	ic.mu.RLock()
-	expectedChecksum, exists := ic.checksums[key]
-	ic.mu.RUnlock()
-
-	if !exists {
-		return nil
-	}
-
-	hash := sha256.Sum256(data)
-	actualChecksum := hex.EncodeToString(hash[:])
-
-	if actualChecksum != expectedChecksum {
-		ic.mu.Lock()
-		ic.corruptionCount++
-		ic.mu.Unlock()
-		return ErrCorruptedData
-	}
-
-	return nil
+	defer ic.mu.RUnlock()
+	return ic.checksums[key]
 }
 
-func (ic *IntegrityChecker) RemoveChecksum(key string) {
-	ic.mu.Lock()
-	defer ic.mu.Unlock()
-	delete(ic.checksums, key)
-}
-
-func (bm *BackupManager) StartBackupScheduler(storage *SecureStorage) {
-	ticker := time.NewTicker(bm.backupInterval)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		if err := bm.CreateBackup(storage); err != nil {
-			// Log error (implement proper logging)
-			continue
-		}
-		bm.CleanupOldBackups()
+// Backup creates a database backup
+func (ss *SecureStorage) Backup() error {
+	ss.backupManager.mu.Lock()
+	if ss.backupManager.backupRunning {
+		ss.backupManager.mu.Unlock()
+		return errors.New("backup already in progress")
 	}
-}
+	ss.backupManager.backupRunning = true
+	ss.backupManager.mu.Unlock()
 
-func (bm *BackupManager) CreateBackup(storage *SecureStorage) error {
-	bm.mu.Lock()
-	defer bm.mu.Unlock()
+	defer func() {
+		ss.backupManager.mu.Lock()
+		ss.backupManager.backupRunning = false
+		ss.backupManager.lastBackup = time.Now()
+		ss.backupManager.mu.Unlock()
+	}()
 
-	timestamp := time.Now().Format("20060102-150405")
-	backupPath := filepath.Join(bm.backupDir, fmt.Sprintf("backup-%s", timestamp))
+	timestamp := time.Now().Format("2006-01-02_15-04-05")
+	backupPath := filepath.Join(ss.backupManager.backupDir, fmt.Sprintf("backup_%s.db", timestamp))
 
-	file, err := badger.DefaultOptions(backupPath).Open()
+	// Create backup file
+	f, err := os.Create(backupPath)
 	if err != nil {
-		return fmt.Errorf("failed to create backup: %w", err)
+		return fmt.Errorf("failed to create backup file: %w", err)
 	}
-	defer file.Close()
+	defer f.Close()
 
-	_, err = storage.db.Backup(file, 0)
+	// Backup using Badger v4 API
+	_, err = ss.db.Backup(f, 0)
 	if err != nil {
+		os.Remove(backupPath)
 		return fmt.Errorf("backup failed: %w", err)
 	}
 
-	metadata := BackupMetadata{
-		Timestamp:    time.Now(),
-		DatabaseSize: 0, // Calculate actual size
-		Version:      "1.0",
-	}
+	// Clean old backups
+	ss.cleanOldBackups()
 
-	metadataJSON, _ := json.Marshal(metadata)
-	metadataPath := filepath.Join(bm.backupDir, fmt.Sprintf("backup-%s.metadata", timestamp))
-	
-	// Write metadata (implement file writing)
-	_ = metadataJSON
-	_ = metadataPath
-
-	bm.lastBackup = time.Now()
 	return nil
 }
 
-func (bm *BackupManager) CleanupOldBackups() {
-	cutoff := time.Now().AddDate(0, 0, -bm.retentionDays)
-	_ = cutoff
-	// Implement cleanup logic
-}
-
-func (gc *GarbageCollector) Start() {
-	ticker := time.NewTicker(gc.interval)
+// startBackupRoutine runs periodic backups
+func (ss *SecureStorage) startBackupRoutine() {
+	ticker := time.NewTicker(ss.backupManager.interval)
 	defer ticker.Stop()
 
-	for {
-		select {
-		case <-ticker.C:
-			gc.runGC()
-		case <-gc.stopChan:
+	for range ticker.C {
+		if ss.closed {
 			return
+		}
+		if err := ss.Backup(); err != nil {
+			// Log error (in production, use proper logger)
+			fmt.Printf("Backup failed: %v\n", err)
 		}
 	}
 }
 
-func (gc *GarbageCollector) Stop() {
-	close(gc.stopChan)
+// startGarbageCollection runs periodic GC
+func (ss *SecureStorage) startGarbageCollection() {
+	ticker := time.NewTicker(GCInterval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		if ss.closed {
+			return
+		}
+		err := ss.db.RunValueLogGC(0.5)
+		if err != nil && err != badger.ErrNoRewrite {
+			// Log error (in production, use proper logger)
+			fmt.Printf("GC failed: %v\n", err)
+		}
+	}
 }
 
-func (gc *GarbageCollector) runGC() {
-	gc.mu.Lock()
-	defer gc.mu.Unlock()
-
-	startTime := time.Now()
-
-	err := gc.db.RunValueLogGC(0.5) // Discard 50% garbage
-	if err != nil && err != badger.ErrNoRewrite {
+// cleanOldBackups removes backups older than retention period
+func (ss *SecureStorage) cleanOldBackups() {
+	entries, err := os.ReadDir(ss.backupManager.backupDir)
+	if err != nil {
 		return
 	}
 
-	gc.gcCount++
-	gc.lastGC = time.Now()
-	
-	_ = startTime
-}
+	cutoff := time.Now().AddDate(0, 0, -ss.backupManager.retention)
 
-func (sm *StorageMetrics) RecordRead(bytes int, latency time.Duration) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
 
-	sm.TotalReads++
-	sm.BytesRead += uint64(bytes)
-	sm.AvgReadLatency = (sm.AvgReadLatency + latency) / 2
-}
-
-func (sm *StorageMetrics) RecordWrite(bytes int, latency time.Duration) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	sm.TotalWrites++
-	sm.BytesWritten += uint64(bytes)
-	sm.AvgWriteLatency = (sm.AvgWriteLatency + latency) / 2
-}
-
-func (sm *StorageMetrics) RecordDelete() {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	sm.TotalDeletes++
-}
-
-func (sm *StorageMetrics) RecordError() {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	sm.ErrorCount++
-}
-
-func (sm *StorageMetrics) GetMetrics() map[string]interface{} {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-
-	return map[string]interface{}{
-		"total_reads":       sm.TotalReads,
-		"total_writes":      sm.TotalWrites,
-		"total_deletes":     sm.TotalDeletes,
-		"bytes_read":        sm.BytesRead,
-		"bytes_written":     sm.BytesWritten,
-		"error_count":       sm.ErrorCount,
-		"avg_read_latency":  sm.AvgReadLatency.String(),
-		"avg_write_latency": sm.AvgWriteLatency.String(),
+		if info.ModTime().Before(cutoff) {
+			path := filepath.Join(ss.backupManager.backupDir, entry.Name())
+			os.Remove(path)
+		}
 	}
 }
 
-func (ss *SecureStorage) GetMetrics() map[string]interface{} {
-	return ss.metricsCollector.GetMetrics()
-}
-
-func (ss *SecureStorage) Close() error {
-	ss.mu.Lock()
-	defer ss.mu.Unlock()
-
+// BatchWrite performs batch write operations
+func (ss *SecureStorage) BatchWrite(operations map[string][]byte) error {
+	ss.mu.RLock()
 	if ss.closed {
-		return nil
+		ss.mu.RUnlock()
+		return ErrDatabaseClosed
 	}
+	ss.mu.RUnlock()
 
-	ss.gcManager.Stop()
-	ss.closed = true
-
-	return ss.db.Close()
+	return ss.db.Update(func(txn *badger.Txn) error {
+		for key, value := range operations {
+			encrypted, err := ss.encrypt(value)
+			if err != nil {
+				return err
+			}
+			if err := txn.Set([]byte(key), encrypted); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
-func (ss *SecureStorage) Sync() error {
-	return ss.db.Sync()
-}
-
-func (ss *SecureStorage) GetDatabaseSize() (int64, error) {
+// GetStats returns database statistics
+func (ss *SecureStorage) GetStats() map[string]interface{} {
 	lsm, vlog := ss.db.Size()
-	return lsm + vlog, nil
+	
+	return map[string]interface{}{
+		"lsm_size":     lsm,
+		"vlog_size":    vlog,
+		"total_size":   lsm + vlog,
+		"last_backup":  ss.backupManager.lastBackup,
+		"closed":       ss.closed,
+	}
 }

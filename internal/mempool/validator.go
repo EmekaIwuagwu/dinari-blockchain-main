@@ -32,11 +32,11 @@ func CalculateMinimumFee(tx *types.Transaction) *big.Int {
 
 // sortByPriority sorts transaction entries by priority
 // Priority: highest fee per byte first, then oldest first
-func sortByPriority(entries []*TxEntry) {
+func sortByPriority(entries []*MempoolTx) {
 	sort.Slice(entries, func(i, j int) bool {
 		// Compare fee per byte
-		if entries[i].FeePerByte != entries[j].FeePerByte {
-			return entries[i].FeePerByte > entries[j].FeePerByte
+		if entries[i].Tx.FeePerByte != entries[j].Tx.FeePerByte {
+			return entries[i].Tx.FeePerByte.Cmp(entries[j].Tx.FeePerByte) > 0
 		}
 
 		// If equal fee, oldest first

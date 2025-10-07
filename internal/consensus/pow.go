@@ -15,14 +15,12 @@ import (
 
 const (
 	// Target block time - 15 seconds
-	TargetBlockTime = 15 * time.Second
 	
 	// Difficulty adjustment parameters
 	DifficultyAdjustmentInterval = 120 // Adjust every 120 blocks (~30 minutes)
 	DifficultyAdjustmentWindow   = 11  // Use median of last 11 blocks for timestamp
 	
 	// Difficulty bounds
-	MinDifficulty = 1000        // Minimum difficulty (prevents too easy mining)
 	MaxDifficulty = 0xFFFFFFFF  // Maximum difficulty (32-bit limit)
 	
 	// Difficulty adjustment limits (prevent extreme changes)

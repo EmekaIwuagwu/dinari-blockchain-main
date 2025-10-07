@@ -30,6 +30,7 @@ var (
 	ErrInvalidTransaction     = errors.New("invalid transaction")
 	ErrInsufficientFunds      = errors.New("insufficient funds")
 	ErrInvalidSignature       = errors.New("invalid signature")
+	ErrInvalidPublicKey       = errors.New("invalid public key")
 	ErrNonceTooLow            = errors.New("nonce too low")
 	ErrNonceTooHigh           = errors.New("nonce too high")
 	ErrTransactionTooLarge    = errors.New("transaction size exceeds limit")
@@ -52,13 +53,6 @@ type TransactionValidator struct {
 	multiSigManager   *MultiSigManager
 	riskScorer        *RiskScorer
 	mu                sync.RWMutex
-}
-
-type StateDB interface {
-	GetBalance(address string, tokenType string) (*big.Int, error)
-	GetNonce(address string) (uint64, error)
-	GetCodeSize(address string) (int, error)
-	IsContractAddress(address string) (bool, error)
 }
 
 type VelocityTracker struct {
@@ -225,7 +219,7 @@ func (tv *TransactionValidator) validateBasicStructure(tx *types.Transaction) er
 	}
 
 	if tx.From == tx.To {
-		amount := new(big.Int).SetBytes(tx.Amount)
+		amount := tx.Amount
 		if amount.Cmp(big.NewInt(HighValueThreshold)) > 0 {
 			return ErrSelfTransfer
 		}
@@ -236,16 +230,8 @@ func (tv *TransactionValidator) validateBasicStructure(tx *types.Transaction) er
 		return ErrTransactionTooLarge
 	}
 
-	if time.Since(tx.Timestamp) > MaxTransactionAge {
+	if time.Since(time.Unix(tx.Timestamp, 0)) > MaxTransactionAge {
 		return ErrTransactionExpired
-	}
-
-	if tx.GasPrice < MinGasPrice {
-		return ErrInsufficientGas
-	}
-
-	if tx.GasLimit > MaxGasLimit {
-		return errors.New("gas limit too high")
 	}
 
 	return nil
@@ -272,7 +258,7 @@ func (tv *TransactionValidator) validateSignature(tx *types.Transaction, chainID
 		return ErrInvalidPublicKey
 	}
 
-	txHash := tx.Hash()
+	txHash := tx.Hash[:]
 	
 	err := tv.km.VerifySignature(tx.PublicKey, txHash, tx.Signature, tx.Nonce, chainID)
 	if err != nil {
@@ -300,13 +286,13 @@ func (tv *TransactionValidator) validateNonce(tx *types.Transaction) error {
 }
 
 func (tv *TransactionValidator) validateBalance(tx *types.Transaction) error {
-	balance, err := tv.stateDB.GetBalance(tx.From, tx.TokenType)
+	balance, err := tv.stateDB.GetBalance(tx.From, TokenType(tx.TokenType))
 	if err != nil {
 		return fmt.Errorf("failed to get balance: %w", err)
 	}
 
-	amount := new(big.Int).SetBytes(tx.Amount)
-	fee := new(big.Int).SetUint64(tx.GasPrice * tx.GasLimit)
+	amount := tx.Amount
+	fee := tx.FeeDNT
 	
 	totalRequired := new(big.Int).Add(amount, fee)
 
@@ -318,7 +304,7 @@ func (tv *TransactionValidator) validateBalance(tx *types.Transaction) error {
 }
 
 func (tv *TransactionValidator) validateAmount(tx *types.Transaction) error {
-	amount := new(big.Int).SetBytes(tx.Amount)
+	amount := tx.Amount
 
 	if amount.Sign() <= 0 {
 		return ErrInvalidAmount
@@ -333,7 +319,7 @@ func (tv *TransactionValidator) validateAmount(tx *types.Transaction) error {
 }
 
 func (tv *TransactionValidator) validateVelocity(tx *types.Transaction) error {
-	amount := new(big.Int).SetBytes(tx.Amount)
+	amount := tx.Amount
 	
 	dailyTotal := tv.velocityTracker.GetDailyVolume(tx.From)
 	newTotal := new(big.Int).Add(dailyTotal, amount)
@@ -348,34 +334,25 @@ func (tv *TransactionValidator) validateVelocity(tx *types.Transaction) error {
 }
 
 func (tv *TransactionValidator) requiresMultiSig(tx *types.Transaction) bool {
-	amount := new(big.Int).SetBytes(tx.Amount)
+	amount := tx.Amount
 	threshold := new(big.Int).SetInt64(VeryHighValueThreshold)
 	
 	return amount.Cmp(threshold) >= 0
 }
 
 func (tv *TransactionValidator) hasValidMultiSig(tx *types.Transaction) bool {
-	if tx.MultiSigData == nil {
+	if tx.MultiSig == nil {
 		return false
 	}
 
-	wallet, exists := tv.multiSigManager.GetWallet(tx.MultiSigData.PolicyID)
-	if !exists {
-		return false
-	}
-
-	ready, err := wallet.IsTransactionReady(tx.Hash())
-	if err != nil {
-		return false
-	}
-
-	return ready
+	// Check if multisig has required signatures
+	return tx.HasSufficientSignatures()
 }
 
 func (tv *TransactionValidator) calculateRiskScore(tx *types.Transaction) int {
 	score := 0
 
-	amount := new(big.Int).SetBytes(tx.Amount)
+	amount := tx.Amount
 	
 	if amount.Cmp(big.NewInt(HighValueThreshold)) > 0 {
 		score += 20
@@ -384,17 +361,12 @@ func (tv *TransactionValidator) calculateRiskScore(tx *types.Transaction) int {
 		score += 30
 	}
 
-	if time.Since(tx.Timestamp) < 1*time.Minute {
+	if time.Since(time.Unix(tx.Timestamp, 0)) < 1*time.Minute {
 		score += 10
-	}
-
-	if tx.GasPrice > MinGasPrice*10 {
-		score += 5
 	}
 
 	isNewFrom := tv.riskScorer.IsNewAddress(tx.From)
 	isNewTo := tv.riskScorer.IsNewAddress(tx.To)
-	
 	if isNewFrom && isNewTo {
 		score += 15
 	}
@@ -410,9 +382,10 @@ func (tv *TransactionValidator) calculateRiskScore(tx *types.Transaction) int {
 func (tv *TransactionValidator) estimateGas(tx *types.Transaction) uint64 {
 	baseGas := uint64(21000)
 	
-	dataGas := uint64(len(tx.Data)) * 68
+	// Estimate data gas (if tx has Data field)
+	dataGas := uint64(0)
 	
-	if tx.MultiSigData != nil {
+	if tx.MultiSig != nil {
 		baseGas += 50000
 	}
 	

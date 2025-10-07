@@ -7,7 +7,7 @@ import (
 )
 
 // handleWalletCreate creates a new wallet
-func (s *RPCServer) handleWalletCreate(params json.RawMessage) (interface{}, *RPCError) {
+func (s *Server) handleWalletCreate(params json.RawMessage) (interface{}, *RPCError) {
 	// Generate private key
 	privKey, err := crypto.GeneratePrivateKey()
 	if err != nil {
@@ -36,7 +36,7 @@ func (s *RPCServer) handleWalletCreate(params json.RawMessage) (interface{}, *RP
 
 
 // handleWalletBalance returns the balance for an address
-func (s *RPCServer) handleWalletBalance(params json.RawMessage) (interface{}, *RPCError) {
+func (s *Server) handleWalletBalance(params json.RawMessage) (interface{}, *RPCError) {
 	var req struct {
 		Address string `json:"address"`
 	}

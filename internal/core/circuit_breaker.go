@@ -58,7 +58,7 @@ type CircuitBreaker struct {
 	lastStateChange      time.Time
 	lastFailureTime      time.Time
 	anomalyDetector      *AnomalyDetector
-	rateLimit er         *RateLimiter
+	rateLimiter         *RateLimiter
 	alertManager         *AlertManager
 	config               *CircuitBreakerConfig
 	metrics              *CircuitMetrics

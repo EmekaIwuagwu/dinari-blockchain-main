@@ -4,10 +4,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"math/big"
+	"strconv"
+
+	"github.com/EmekaIwuagwu/dinari-blockchain/internal/core"
+	"github.com/EmekaIwuagwu/dinari-blockchain/internal/types"
 )
 
 // handleChainGetBlocks returns multiple blocks in a range
-func (s *RPCServer) handleChainGetBlocks(params json.RawMessage) (interface{}, *RPCError) {
+func (s *Server) handleChainGetBlocks(params json.RawMessage) (interface{}, *RPCError) {
 	var req struct {
 		From  uint64 `json:"from"`
 		To    uint64 `json:"to"`
@@ -18,12 +22,10 @@ func (s *RPCServer) handleChainGetBlocks(params json.RawMessage) (interface{}, *
 		return nil, &RPCError{Code: -32602, Message: "invalid params"}
 	}
 
-	// Default limit
 	if req.Limit == 0 || req.Limit > 100 {
 		req.Limit = 20
 	}
 
-	// Validate range
 	currentHeight := s.blockchain.GetHeight()
 	if req.To > currentHeight {
 		req.To = currentHeight
@@ -32,31 +34,28 @@ func (s *RPCServer) handleChainGetBlocks(params json.RawMessage) (interface{}, *
 		req.From = req.To
 	}
 
-	// Calculate actual range
 	count := req.To - req.From + 1
 	if count > uint64(req.Limit) {
 		count = uint64(req.Limit)
 	}
 
-	// Fetch blocks
 	blocks := make([]interface{}, 0, count)
 	for i := uint64(0); i < count; i++ {
-		height := req.To - i // Start from newest
+		height := req.To - i
 
-		block, err := s.blockchain.GetBlock(height)
+		block, err := s.blockchain.GetBlockByHeight(height)
 		if err != nil {
 			continue
 		}
 
 		blocks = append(blocks, map[string]interface{}{
-			"number":      block.Header.Number,
-			"hash":        "0x" + hex.EncodeToString(block.Hash[:]),
-			"parentHash":  "0x" + hex.EncodeToString(block.Header.ParentHash[:]),
-			"timestamp":   block.Header.Timestamp,
-			"difficulty":  block.Header.Difficulty.String(),
-			"miner":       block.Header.MinerAddress,
-			"txCount":     block.Header.TxCount,
-			"size":        block.Size(),
+			"number":     block.Header.Height,
+			"hash":       "0x" + hex.EncodeToString(block.Header.Hash),
+			"parentHash": "0x" + hex.EncodeToString(block.Header.PrevBlockHash),
+			"timestamp":  block.Header.Timestamp,
+			"difficulty": block.Header.Difficulty,
+			"txCount":    len(block.Transactions),
+			"size":       calculateBlockSize(block),
 		})
 	}
 
@@ -69,35 +68,31 @@ func (s *RPCServer) handleChainGetBlocks(params json.RawMessage) (interface{}, *
 }
 
 // handleChainGetStats returns blockchain statistics
-func (s *RPCServer) handleChainGetStats(params json.RawMessage) (interface{}, *RPCError) {
+func (s *Server) handleChainGetStats(params json.RawMessage) (interface{}, *RPCError) {
 	height := s.blockchain.GetHeight()
-	tip := s.blockchain.GetTip()
 
-	// Get latest block for additional info
-	latestBlock, err := s.blockchain.GetBlock(height)
+	latestBlock, err := s.blockchain.GetBlockByHeight(height)
 	if err != nil {
 		return nil, &RPCError{Code: -32000, Message: "failed to get latest block"}
 	}
 
-	// Calculate total supply (approximate based on blocks mined)
-	// Each block has 50 DNT reward (simplified, not accounting for halving yet)
 	totalSupply := new(big.Int).Mul(big.NewInt(int64(height+1)), big.NewInt(5000000000))
 
 	return map[string]interface{}{
-		"height":           height,
-		"tipHash":          "0x" + hex.EncodeToString(tip[:]),
-		"difficulty":       latestBlock.Header.Difficulty.String(),
-		"totalBlocks":      height + 1,
-		"totalSupplyDNT":   totalSupply.String(),
-		"avgBlockTime":     15,
-		"networkHashRate":  "N/A",
-		"mempoolSize":      s.mempool.Size(),
-		"miningActive":     s.miner.IsRunning(),
+		"height":          height,
+		"tipHash":         "0x" + strconv.FormatUint(height, 10),
+		"difficulty":      latestBlock.Header.Difficulty,
+		"totalBlocks":     height + 1,
+		"totalSupplyDNT":  totalSupply.String(),
+		"avgBlockTime":    15,
+		"networkHashRate": "calculating",
+		"mempoolSize":     s.mempool.Size(),
+		"miningActive":    false,
 	}, nil
 }
 
 // handleChainSearch searches for blocks, transactions, or addresses
-func (s *RPCServer) handleChainSearch(params json.RawMessage) (interface{}, *RPCError) {
+func (s *Server) handleChainSearch(params json.RawMessage) (interface{}, *RPCError) {
 	var req struct {
 		Query string `json:"query"`
 	}
@@ -108,19 +103,18 @@ func (s *RPCServer) handleChainSearch(params json.RawMessage) (interface{}, *RPC
 
 	query := req.Query
 
-	// Try as block height (numeric)
+	// Try as block height
 	var blockHeight uint64
 	if err := json.Unmarshal([]byte(query), &blockHeight); err == nil {
-		block, err := s.blockchain.GetBlock(blockHeight)
+		block, err := s.blockchain.GetBlockByHeight(blockHeight)
 		if err == nil {
 			return map[string]interface{}{
 				"type": "block",
 				"result": map[string]interface{}{
-					"number":     block.Header.Number,
-					"hash":       "0x" + hex.EncodeToString(block.Hash[:]),
-					"timestamp":  block.Header.Timestamp,
-					"txCount":    block.Header.TxCount,
-					"miner":      block.Header.MinerAddress,
+					"number":    block.Header.Height,
+					"hash":      "0x" + hex.EncodeToString(block.Header.Hash),
+					"timestamp": block.Header.Timestamp,
+					"txCount":   len(block.Transactions),
 				},
 			}, nil
 		}
@@ -132,19 +126,15 @@ func (s *RPCServer) handleChainSearch(params json.RawMessage) (interface{}, *RPC
 		if len(hashStr) == 64 {
 			hashBytes, err := hex.DecodeString(hashStr)
 			if err == nil && len(hashBytes) == 32 {
-				var blockHash [32]byte
-				copy(blockHash[:], hashBytes)
-
-				block, err := s.blockchain.GetBlockByHash(blockHash)
+				block, err := s.blockchain.GetBlockByHash(hashBytes)
 				if err == nil {
 					return map[string]interface{}{
 						"type": "block",
 						"result": map[string]interface{}{
-							"number":     block.Header.Number,
-							"hash":       "0x" + hex.EncodeToString(block.Hash[:]),
-							"timestamp":  block.Header.Timestamp,
-							"txCount":    block.Header.TxCount,
-							"miner":      block.Header.MinerAddress,
+							"number":    block.Header.Height,
+							"hash":      "0x" + hex.EncodeToString(block.Header.Hash),
+							"timestamp": block.Header.Timestamp,
+							"txCount":   len(block.Transactions),
 						},
 					}, nil
 				}
@@ -155,10 +145,8 @@ func (s *RPCServer) handleChainSearch(params json.RawMessage) (interface{}, *RPC
 		if len(hashStr) >= 16 {
 			hashBytes, err := hex.DecodeString(hashStr)
 			if err == nil && len(hashBytes) == 32 {
-				var txHash [32]byte
-				copy(txHash[:], hashBytes)
-
-				if tx, found := s.mempool.GetTransaction(txHash); found {
+				tx, found := s.mempool.GetTransaction(hex.EncodeToString(hashBytes))
+				if found {
 					return map[string]interface{}{
 						"type":   "transaction",
 						"result": formatTransaction(tx),
@@ -168,25 +156,12 @@ func (s *RPCServer) handleChainSearch(params json.RawMessage) (interface{}, *RPC
 		}
 	}
 
-	// Try as address
-	account, err := s.blockchain.GetState().GetAccount(query)
-	if err == nil && (account.BalanceDNT.Sign() > 0 || account.BalanceAFC.Sign() > 0 || account.Nonce > 0) {
-		return map[string]interface{}{
-			"type": "address",
-			"result": map[string]interface{}{
-				"address":    account.Address,
-				"balanceDNT": account.BalanceDNT.String(),
-				"balanceAFC": account.BalanceAFC.String(),
-				"nonce":      account.Nonce,
-			},
-		}, nil
-	}
-
+	// Address lookup not available in this configuration
 	return nil, &RPCError{Code: -32004, Message: "not found"}
 }
 
 // handleChainGetRecentBlocks returns the most recent blocks
-func (s *RPCServer) handleChainGetRecentBlocks(params json.RawMessage) (interface{}, *RPCError) {
+func (s *Server) handleChainGetRecentBlocks(params json.RawMessage) (interface{}, *RPCError) {
 	var req struct {
 		Limit int `json:"limit"`
 	}
@@ -205,5 +180,30 @@ func (s *RPCServer) handleChainGetRecentBlocks(params json.RawMessage) (interfac
 		fromHeight = currentHeight - uint64(req.Limit-1)
 	}
 
-	return s.handleChainGetBlocks(json.RawMessage(`{"from":` + json.Number(fromHeight).String() + `,"to":` + json.Number(currentHeight).String() + `,"limit":` + json.Number(req.Limit).String() + `}`))
+	reqJSON, _ := json.Marshal(map[string]interface{}{
+		"from":  fromHeight,
+		"to":    currentHeight,
+		"limit": req.Limit,
+	})
+
+	return s.handleChainGetBlocks(reqJSON)
+}
+
+// calculateBlockSize estimates block size
+func calculateBlockSize(block *core.Block) int {
+	return len(block.Transactions) * 250
+}
+
+// formatTransaction formats a transaction for JSON response
+func formatTransaction(tx *types.Transaction) map[string]interface{} {
+	return map[string]interface{}{
+		"hash":      "0x" + hex.EncodeToString(tx.Hash[:]),
+		"from":      tx.From,
+		"to":        tx.To,
+		"amount":    tx.Amount.String(),
+		"tokenType": tx.TokenType,
+		"fee":       tx.FeeDNT.String(),
+		"nonce":     tx.Nonce,
+		"timestamp": tx.Timestamp,
+	}
 }

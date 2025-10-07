@@ -167,7 +167,7 @@ func (mp *Mempool) AddTransaction(tx *Transaction) error {
 	
 	// 5. Check for Replace-By-Fee (RBF)
 	if existingTx, exists := mp.getTxByNonce(tx.From, tx.Nonce); exists {
-		if err := mp.handleReplaceByFee(existingTx, tx); err != nil {
+		if err := mp.handleReplaceByFee(existingTx.Tx, tx); err != nil {
 			mp.stats.RejectedCount++
 			return err
 		}

@@ -15,6 +15,9 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/time/rate"
+
+	"github.com/EmekaIwuagwu/dinari-blockchain/internal/core"
+	"github.com/EmekaIwuagwu/dinari-blockchain/internal/mempool"
 )
 
 const (
@@ -152,6 +155,10 @@ type Server struct {
 	config   *ServerConfig
 	server   *http.Server
 	handlers map[string]HandlerFunc
+
+	// Blockchain dependencies
+	blockchain *core.Blockchain
+	mempool    *mempool.Mempool
 	
 	// Rate limiting
 	limiters   map[string]*rate.Limiter

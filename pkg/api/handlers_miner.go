@@ -5,35 +5,31 @@ import (
 )
 
 // handleMinerStart starts the mining process
-func (s *RPCServer) handleMinerStart(params json.RawMessage) (interface{}, *RPCError) {
-	if s.miner.IsRunning() {
-		return nil, &RPCError{Code: -32000, Message: "miner already running"}
+func (s *Server) handleMinerStart(params json.RawMessage) (interface{}, *RPCError) {
+	return nil, &RPCError{
+		Code:    -32601,
+		Message: "Mining functionality not available in this node configuration",
 	}
-
-	if err := s.miner.Start(); err != nil {
-		return nil, &RPCError{Code: -32000, Message: "failed to start miner: " + err.Error()}
-	}
-
-	return map[string]interface{}{
-		"status": "mining started",
-	}, nil
 }
 
 // handleMinerStop stops the mining process
-func (s *RPCServer) handleMinerStop(params json.RawMessage) (interface{}, *RPCError) {
-	if !s.miner.IsRunning() {
-		return nil, &RPCError{Code: -32000, Message: "miner not running"}
+func (s *Server) handleMinerStop(params json.RawMessage) (interface{}, *RPCError) {
+	return nil, &RPCError{
+		Code:    -32601,
+		Message: "Mining functionality not available in this node configuration",
 	}
-
-	s.miner.Stop()
-
-	return map[string]interface{}{
-		"status": "mining stopped",
-	}, nil
 }
 
 // handleMinerStatus returns the current miner status
-func (s *RPCServer) handleMinerStatus(params json.RawMessage) (interface{}, *RPCError) {
-	stats := s.miner.Stats()
-	return stats, nil
+func (s *Server) handleMinerStatus(params json.RawMessage) (interface{}, *RPCError) {
+	return map[string]interface{}{
+		"enabled":      false,
+		"running":      false,
+		"hashrate":     0,
+		"blocksMined":  0,
+		"difficulty":   0,
+		"workers":      0,
+		"lastBlock":    nil,
+		"uptime":       0,
+	}, nil
 }

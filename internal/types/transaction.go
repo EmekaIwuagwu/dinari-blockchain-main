@@ -19,16 +19,17 @@ const (
 
 // Transaction represents a transfer of tokens between addresses
 type Transaction struct {
-	Hash      [32]byte `json:"hash"`
-	From      string   `json:"from"`
-	To        string   `json:"to"`
-	Amount    *big.Int `json:"amount"`
-	TokenType string   `json:"tokenType"`
-	FeeDNT    *big.Int `json:"fee"`
-	Nonce     uint64   `json:"nonce"`
-	Timestamp int64    `json:"timestamp"`
-	Signature []byte   `json:"signature"`
-	PublicKey []byte   `json:"publicKey"`
+	Hash      [32]byte       `json:"hash"`
+	From      string         `json:"from"`
+	To        string         `json:"to"`
+	Amount    *big.Int       `json:"amount"`
+	TokenType string         `json:"tokenType"`
+	FeeDNT    *big.Int       `json:"fee"`
+	Nonce     uint64         `json:"nonce"`
+	Timestamp int64          `json:"timestamp"`
+	Signature []byte         `json:"signature"`
+	PublicKey []byte         `json:"publicKey"`
+	MultiSig  *MultiSigData  `json:"multisig,omitempty"` // NEW: Multi-signature support
 }
 
 // NewTransaction creates a new transaction
@@ -194,7 +195,7 @@ func (tx *Transaction) String() string {
 
 // Copy creates a deep copy of the transaction
 func (tx *Transaction) Copy() *Transaction {
-	return &Transaction{
+	newTx := &Transaction{
 		Hash:      tx.Hash,
 		From:      tx.From,
 		To:        tx.To,
@@ -206,6 +207,21 @@ func (tx *Transaction) Copy() *Transaction {
 		Signature: append([]byte{}, tx.Signature...),
 		PublicKey: append([]byte{}, tx.PublicKey...),
 	}
+	
+	// Copy MultiSig if present
+	if tx.MultiSig != nil {
+		newTx.MultiSig = &MultiSigData{
+			RequiredSignatures: tx.MultiSig.RequiredSignatures,
+			TotalParticipants:  tx.MultiSig.TotalParticipants,
+			Participants:       append([]string{}, tx.MultiSig.Participants...),
+			Signatures:         append([]MultiSigSignature{}, tx.MultiSig.Signatures...),
+		}
+		if tx.MultiSig.Threshold != nil {
+			newTx.MultiSig.Threshold = new(big.Int).Set(tx.MultiSig.Threshold)
+		}
+	}
+	
+	return newTx
 }
 
 // FeePerByte calculates the fee per byte for priority sorting

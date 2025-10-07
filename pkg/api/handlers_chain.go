@@ -1,14 +1,20 @@
 package api
 
 import (
+	"strconv"
+	"fmt"
+)
+
+import (
 	"encoding/hex"
 	"encoding/json"
 	
 	"github.com/EmekaIwuagwu/dinari-blockchain/internal/types"
+	"github.com/EmekaIwuagwu/dinari-blockchain/internal/core"
 )
 
 // handleChainGetBlock retrieves a block by hash or height
-func (s *RPCServer) handleChainGetBlock(params json.RawMessage) (interface{}, *RPCError) {
+func (s *Server) handleChainGetBlock(params json.RawMessage) (interface{}, *RPCError) {
 	var req struct {
 		BlockHash   string `json:"blockHash,omitempty"`
 		BlockHeight *uint64 `json:"blockHeight,omitempty"`
@@ -18,7 +24,7 @@ func (s *RPCServer) handleChainGetBlock(params json.RawMessage) (interface{}, *R
 		return nil, &RPCError{Code: -32602, Message: "invalid params"}
 	}
 
-	var block *types.Block
+	var block *core.Block
 	var err error
 
 	// Get by hash if provided
@@ -36,10 +42,10 @@ func (s *RPCServer) handleChainGetBlock(params json.RawMessage) (interface{}, *R
 		var hash [32]byte
 		copy(hash[:], hashBytes)
 
-		block, err = s.blockchain.GetBlockByHash(hash)
+		block, err = s.blockchain.GetBlockByHash(hash[:])
 	} else if req.BlockHeight != nil {
 		// Get by height
-		block, err = s.blockchain.GetBlock(*req.BlockHeight)
+		block, err = s.blockchain.GetBlockByHeight(*req.BlockHeight)
 	} else {
 		return nil, &RPCError{Code: -32602, Message: "must provide blockHash or blockHeight"}
 	}
@@ -51,8 +57,8 @@ func (s *RPCServer) handleChainGetBlock(params json.RawMessage) (interface{}, *R
 	// Calculate confirmations
 	currentHeight := s.blockchain.GetHeight()
 	confirmations := uint64(0)
-	if block.Header.Number <= currentHeight {
-		confirmations = currentHeight - block.Header.Number + 1
+	if block.Header.Height <= currentHeight {
+		confirmations = currentHeight - block.Header.Height + 1
 	}
 
 	// Format transactions
@@ -63,54 +69,54 @@ func (s *RPCServer) handleChainGetBlock(params json.RawMessage) (interface{}, *R
 
 	return map[string]interface{}{
 		"header": map[string]interface{}{
-			"number":       block.Header.Number,
-			"parentHash":   "0x" + hex.EncodeToString(block.Header.ParentHash[:]),
+			"number":       block.Header.Height,
+			"parentHash":   "0x" + hex.EncodeToString(block.Header.PrevBlockHash[:]),
 			"timestamp":    block.Header.Timestamp,
-			"difficulty":   block.Header.Difficulty.String(),
+			"difficulty":   block.Header.Difficulty,
 			"nonce":        block.Header.Nonce,
 			"merkleRoot":   "0x" + hex.EncodeToString(block.Header.MerkleRoot[:]),
 			"stateRoot":    "0x" + hex.EncodeToString(block.Header.StateRoot[:]),
-			"miner":        block.Header.MinerAddress,
-			"txCount":      block.Header.TxCount,
+			"miner":        "coinbase",
+			"txCount":      len(block.Transactions),
 		},
-		"hash":          "0x" + hex.EncodeToString(block.Hash[:]),
+		"hash":          "0x" + hex.EncodeToString(block.Header.Hash[:]),
 		"transactions":  txs,
 		"confirmations": confirmations,
 	}, nil
 }
 
 // handleChainGetHeight returns the current blockchain height
-func (s *RPCServer) handleChainGetHeight(params json.RawMessage) (interface{}, *RPCError) {
+func (s *Server) handleChainGetHeight(params json.RawMessage) (interface{}, *RPCError) {
 	height := s.blockchain.GetHeight()
-	tip := s.blockchain.GetTip()
+	tip := s.blockchain.GetHeight()
 
 	// Get current block
-	block, err := s.blockchain.GetBlock(height)
+	block, err := s.blockchain.GetBlockByHeight(height)
 	if err != nil {
 		return nil, &RPCError{Code: -32000, Message: "failed to get current block"}
 	}
 
 	return map[string]interface{}{
 		"height":     height,
-		"hash":       "0x" + hex.EncodeToString(tip[:]),
-		"difficulty": block.Header.Difficulty.String(),
+		"hash":       "0x" + strconv.FormatUint(tip, 16),
+		"difficulty": block.Header.Difficulty,
 		"timestamp":  block.Header.Timestamp,
 	}, nil
 }
 
 // handleChainGetTip returns the current chain tip
-func (s *RPCServer) handleChainGetTip(params json.RawMessage) (interface{}, *RPCError) {
-	tip := s.blockchain.GetTip()
+func (s *Server) handleChainGetTip(params json.RawMessage) (interface{}, *RPCError) {
+	tip := s.blockchain.GetHeight()
 	height := s.blockchain.GetHeight()
 
 	return map[string]interface{}{
-		"hash":   "0x" + hex.EncodeToString(tip[:]),
+		"hash":   "0x" + strconv.FormatUint(tip, 16),
 		"height": height,
 	}, nil
 }
 
 // handleMempoolStats returns mempool statistics
-func (s *RPCServer) handleMempoolStats(params json.RawMessage) (interface{}, *RPCError) {
-	stats := s.mempool.Stats()
+func (s *Server) handleMempoolStats(params json.RawMessage) (interface{}, *RPCError) {
+	stats := s.mempool.GetStats()
 	return stats, nil
 }

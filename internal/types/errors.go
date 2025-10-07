@@ -4,19 +4,20 @@ import "errors"
 
 // Block validation errors
 var (
-	ErrInvalidBlockHash   = errors.New("invalid block hash")
-	ErrInvalidParentHash  = errors.New("invalid parent hash")
-	ErrInvalidTimestamp   = errors.New("invalid timestamp")
-	ErrInvalidDifficulty  = errors.New("invalid difficulty")
-	ErrInvalidMerkleRoot  = errors.New("invalid merkle root")
-	ErrInvalidStateRoot   = errors.New("invalid state root")
-	ErrInvalidTxCount     = errors.New("transaction count mismatch")
-	ErrBlockTooLarge      = errors.New("block exceeds maximum size")
-	ErrInvalidPoW         = errors.New("invalid proof of work")
+	ErrInvalidBlockHash  = errors.New("invalid block hash")
+	ErrInvalidParentHash = errors.New("invalid parent hash")
+	ErrInvalidTimestamp  = errors.New("invalid timestamp")
+	ErrInvalidDifficulty = errors.New("invalid difficulty")
+	ErrInvalidMerkleRoot = errors.New("invalid merkle root")
+	ErrInvalidStateRoot  = errors.New("invalid state root")
+	ErrInvalidTxCount    = errors.New("transaction count mismatch")
+	ErrBlockTooLarge     = errors.New("block exceeds maximum size")
+	ErrInvalidPoW        = errors.New("invalid proof of work")
 )
 
 // Transaction validation errors
 var (
+	ErrInvalidTransaction   = errors.New("invalid transaction") // NEW: General transaction error
 	ErrInvalidTxHash        = errors.New("invalid transaction hash")
 	ErrInvalidFromAddress   = errors.New("invalid from address")
 	ErrInvalidToAddress     = errors.New("invalid to address")
@@ -31,8 +32,8 @@ var (
 	ErrFeeTooLow            = errors.New("fee too low")
 	ErrInsufficientBalance  = errors.New("insufficient balance")
 	ErrDuplicateTransaction = errors.New("duplicate transaction")
-	ErrTxNotFound      		= errors.New("transaction not found")
-	ErrReceiptNotFound 		= errors.New("receipt not found")
+	ErrTxNotFound           = errors.New("transaction not found")
+	ErrReceiptNotFound      = errors.New("receipt not found")
 )
 
 // Account errors
@@ -50,12 +51,12 @@ var (
 
 // Blockchain errors
 var (
-	ErrBlockNotFound     = errors.New("block not found")
-	ErrInvalidChain      = errors.New("invalid blockchain")
-	ErrOrphanBlock       = errors.New("orphan block")
-	ErrReorgTooDeep      = errors.New("reorganization too deep")
-	ErrGenesisNotFound   = errors.New("genesis block not found")
-	ErrChainTipNotFound  = errors.New("chain tip not found")
+	ErrBlockNotFound    = errors.New("block not found")
+	ErrInvalidChain     = errors.New("invalid blockchain")
+	ErrOrphanBlock      = errors.New("orphan block")
+	ErrReorgTooDeep     = errors.New("reorganization too deep")
+	ErrGenesisNotFound  = errors.New("genesis block not found")
+	ErrChainTipNotFound = errors.New("chain tip not found")
 )
 
 // Mempool errors
@@ -68,10 +69,10 @@ var (
 
 // Consensus errors
 var (
-	ErrInvalidReward      = errors.New("invalid block reward")
-	ErrInvalidCoinbase    = errors.New("invalid coinbase transaction")
-	ErrMultipleCoinbase   = errors.New("multiple coinbase transactions")
-	ErrMissingCoinbase    = errors.New("missing coinbase transaction")
+	ErrInvalidReward    = errors.New("invalid block reward")
+	ErrInvalidCoinbase  = errors.New("invalid coinbase transaction")
+	ErrMultipleCoinbase = errors.New("multiple coinbase transactions")
+	ErrMissingCoinbase  = errors.New("missing coinbase transaction")
 )
 
 // Mint errors
@@ -83,10 +84,10 @@ var (
 
 // Network errors
 var (
-	ErrInvalidPeer     = errors.New("invalid peer")
+	ErrInvalidPeer      = errors.New("invalid peer")
 	ErrPeerDisconnected = errors.New("peer disconnected")
-	ErrNetworkTimeout  = errors.New("network timeout")
-	ErrInvalidMessage  = errors.New("invalid message")
+	ErrNetworkTimeout   = errors.New("network timeout")
+	ErrInvalidMessage   = errors.New("invalid message")
 )
 
 // Storage errors

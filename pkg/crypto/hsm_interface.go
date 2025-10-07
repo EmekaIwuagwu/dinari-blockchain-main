@@ -1,10 +1,10 @@
 // pkg/crypto/hsm_interface.go
 // Hardware Security Module integration for production-grade key management
-
 package crypto
 
 import (
 	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -17,19 +17,18 @@ import (
 )
 
 const (
-	HSMSessionTimeout    = 30 * time.Minute
-	MaxHSMRetries        = 3
-	HSMOperationTimeout  = 10 * time.Second
-	KeyRotationInterval  = 90 * 24 * time.Hour // 90 days
+	HSMSessionTimeout   = 30 * time.Minute
+	MaxHSMRetries       = 3
+	HSMOperationTimeout = 10 * time.Second
+	KeyRotationInterval = 90 * 24 * time.Hour // 90 days
 )
 
 var (
-	ErrHSMNotAvailable      = errors.New("HSM not available")
-	ErrHSMSessionExpired    = errors.New("HSM session expired")
-	ErrHSMOperationFailed   = errors.New("HSM operation failed")
-	ErrKeyNotFound          = errors.New("key not found in HSM")
-	ErrInvalidHSMConfig     = errors.New("invalid HSM configuration")
-	ErrKeyRotationRequired  = errors.New("key rotation required")
+	ErrHSMNotAvailable    = errors.New("HSM not available")
+	ErrHSMSessionExpired  = errors.New("HSM session expired")
+	ErrHSMOperationFailed = errors.New("HSM operation failed")
+	ErrKeyNotFound        = errors.New("key not found in HSM")
+	ErrInvalidHSMConfig   = errors.New("invalid HSM configuration") // NEW: Missing error
 )
 
 type HSMProvider interface {
@@ -627,7 +626,7 @@ func generateSessionID() string {
 func generateECDSAKeyFromSeed(seed []byte) (*ecdsa.PrivateKey, error) {
 	// Implementation would use proper key derivation
 	// This is simplified for demonstration
-	privKey, err := ecdsa.GenerateKey(crypto.S256(), rand.Reader)
+	privKey, err := ecdsa.GenerateKey(S256(), rand.Reader)
 	return privKey, err
 }
 
