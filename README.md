@@ -80,7 +80,7 @@ Output:
 🔐 Creating new wallet...
 
 === New Wallet Created ===
-Address:     DT1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0
+Address:     DA1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0
 Private Key: a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456
 Public Key:  02a1b2c3d4e5f6789012345678901234567890abcdef
 
@@ -456,10 +456,10 @@ MIT License - see [LICENSE](LICENSE) file for details
 
 ## 📧 Contact
 
-- Website: https://dinarichain.io
-- Email: dev@dinarichain.io
-- Discord: https://discord.gg/dinari
-- Twitter: @dinarichain
+- Website: https://dinariblockchain.network
+- Email: dev@dinariblockchain.network
+- Discord: https://discord.gg/dinariblockchain
+- Twitter: @dinariblockchain
 
 ## 🙏 Acknowledgments
 
