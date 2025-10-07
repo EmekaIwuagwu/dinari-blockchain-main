@@ -50,8 +50,8 @@ data:
       cors:
         enabled: true
         allowed_origins:
-          - "https://api.dinarichain.io"
-          - "https://explorer.dinarichain.io"
+          - "https://api.dinariblockchain.network"
+          - "https://explorer.dinariblockchain.network"
       
       # Rate limiting (production settings)
       rate_limit:
@@ -151,11 +151,11 @@ data:
 
   # Bootstrap peers for mainnet
   bootstrap-peers.txt: |
-    /ip4/seed1.dinarichain.io/tcp/9000/p2p/REPLACE_WITH_MAINNET_SEED1_PEER_ID
-    /ip4/seed2.dinarichain.io/tcp/9000/p2p/REPLACE_WITH_MAINNET_SEED2_PEER_ID
-    /ip4/seed3.dinarichain.io/tcp/9000/p2p/REPLACE_WITH_MAINNET_SEED3_PEER_ID
-    /ip4/seed4.dinarichain.io/tcp/9000/p2p/REPLACE_WITH_MAINNET_SEED4_PEER_ID
-    /ip4/seed5.dinarichain.io/tcp/9000/p2p/REPLACE_WITH_MAINNET_SEED5_PEER_ID
+    /ip4/seed1.dinariblockchain.network/tcp/9000/p2p/REPLACE_WITH_MAINNET_SEED1_PEER_ID
+    /ip4/seed2.dinariblockchain.network/tcp/9000/p2p/REPLACE_WITH_MAINNET_SEED2_PEER_ID
+    /ip4/seed3.dinariblockchain.network/tcp/9000/p2p/REPLACE_WITH_MAINNET_SEED3_PEER_ID
+    /ip4/seed4.dinariblockchain.network/tcp/9000/p2p/REPLACE_WITH_MAINNET_SEED4_PEER_ID
+    /ip4/seed5.dinariblockchain.network/tcp/9000/p2p/REPLACE_WITH_MAINNET_SEED5_PEER_ID
 
   # Genesis block configuration
   genesis.json: |
@@ -164,7 +164,7 @@ data:
       "chain_id": 1,
       "timestamp": 1704067200,
       "difficulty": 10000,
-      "coinbase": "DT0000000000000000000000000000000000000000",
+      "coinbase": "D00000000000000000000000000000000000000000",
       "message": "Genesis Block - DinariBlockchain for Africa"
     }
 
@@ -309,9 +309,9 @@ data:
 
   # Bootstrap peers for testnet
   bootstrap-peers.txt: |
-    /ip4/testnet-seed1.dinarichain.io/tcp/9000/p2p/REPLACE_WITH_TESTNET_SEED1_PEER_ID
-    /ip4/testnet-seed2.dinarichain.io/tcp/9000/p2p/REPLACE_WITH_TESTNET_SEED2_PEER_ID
-    /ip4/testnet-seed3.dinarichain.io/tcp/9000/p2p/REPLACE_WITH_TESTNET_SEED3_PEER_ID
+    /ip4/testnet-seed1.dinariblockchain.network/tcp/9000/p2p/REPLACE_WITH_TESTNET_SEED1_PEER_ID
+    /ip4/testnet-seed2.dinariblockchain.network/tcp/9000/p2p/REPLACE_WITH_TESTNET_SEED2_PEER_ID
+    /ip4/testnet-seed3.dinariblockchain.network/tcp/9000/p2p/REPLACE_WITH_TESTNET_SEED3_PEER_ID
 
   # Genesis block configuration
   genesis.json: |
@@ -320,6 +320,6 @@ data:
       "chain_id": 2,
       "timestamp": 1704067200,
       "difficulty": 1000,
-      "coinbase": "DT0000000000000000000000000000000000000000",
+      "coinbase": "D00000000000000000000000000000000000000000",
       "message": "Testnet Genesis - DinariBlockchain for Africa"
     }
