@@ -1,4 +1,4 @@
-# DinariBlockchain - Production-Grade Blockchain for Africa
+# DinariBlockchain - The Blockchain for Africa.
 
 A fully production-ready blockchain implementation built from scratch in Go, designed for cross-border payments and financial inclusion in Africa.
 
