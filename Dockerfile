@@ -99,7 +99,7 @@ FROM gcr.io/distroless/static-debian11:nonroot AS runtime
 ARG NETWORK
 
 # Labels for container metadata
-LABEL maintainer="DinariBlockchain Team <dev@dinarichain.io>" \
+LABEL maintainer="DinariBlockchain Team <dev@dinariblockchain.network>" \
       description="DinariBlockchain ${NETWORK} Node" \
       version="${VERSION}" \
       network="${NETWORK}"
