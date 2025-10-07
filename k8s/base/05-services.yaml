@@ -1,0 +1,174 @@
+# ==============================================================================
+# DinariBlockchain - Services (Cloud-Agnostic)
+# Works on AWS, GCP, Azure, and on-premise
+# ==============================================================================
+
+---
+# Headless service for StatefulSet DNS
+apiVersion: v1
+kind: Service
+metadata:
+  name: dinari-mainnet-node-headless
+  namespace: dinari-mainnet
+  labels:
+    app: dinari-blockchain
+    network: mainnet
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: dinari-blockchain
+    network: mainnet
+    component: full-node
+  ports:
+  - name: rpc
+    port: 8545
+    targetPort: 8545
+    protocol: TCP
+  - name: p2p
+    port: 9000
+    targetPort: 9000
+    protocol: TCP
+  - name: metrics
+    port: 9090
+    targetPort: 9090
+    protocol: TCP
+
+---
+# RPC API service (internal ClusterIP by default)
+apiVersion: v1
+kind: Service
+metadata:
+  name: dinari-mainnet-rpc
+  namespace: dinari-mainnet
+  labels:
+    app: dinari-blockchain
+    network: mainnet
+    component: rpc
+spec:
+  type: ClusterIP  # Change to LoadBalancer in cloud overlays
+  selector:
+    app: dinari-blockchain
+    network: mainnet
+    component: full-node
+  ports:
+  - name: rpc
+    port: 8545
+    targetPort: 8545
+    protocol: TCP
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 3600
+
+---
+# P2P service for blockchain network
+apiVersion: v1
+kind: Service
+metadata:
+  name: dinari-mainnet-p2p
+  namespace: dinari-mainnet
+  labels:
+    app: dinari-blockchain
+    network: mainnet
+    component: p2p
+spec:
+  type: NodePort  # Works everywhere
+  selector:
+    app: dinari-blockchain
+    network: mainnet
+    component: full-node
+  ports:
+  - name: p2p
+    port: 9000
+    targetPort: 9000
+    nodePort: 30900
+    protocol: TCP
+
+---
+# Metrics service for Prometheus
+apiVersion: v1
+kind: Service
+metadata:
+  name: dinari-mainnet-metrics
+  namespace: dinari-mainnet
+  labels:
+    app: dinari-blockchain
+    network: mainnet
+    component: metrics
+spec:
+  type: ClusterIP
+  selector:
+    app: dinari-blockchain
+    network: mainnet
+    component: full-node
+  ports:
+  - name: metrics
+    port: 9090
+    targetPort: 9090
+    protocol: TCP
+
+---
+# TESTNET SERVICES
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dinari-testnet-node-headless
+  namespace: dinari-testnet
+  labels:
+    app: dinari-blockchain
+    network: testnet
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: dinari-blockchain
+    network: testnet
+    component: full-node
+  ports:
+  - name: rpc
+    port: 8545
+    targetPort: 8545
+  - name: p2p
+    port: 9000
+    targetPort: 9000
+  - name: metrics
+    port: 9090
+    targetPort: 9090
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dinari-testnet-rpc
+  namespace: dinari-testnet
+  labels:
+    app: dinari-blockchain
+    network: testnet
+spec:
+  type: ClusterIP
+  selector:
+    app: dinari-blockchain
+    network: testnet
+    component: full-node
+  ports:
+  - name: rpc
+    port: 8545
+    targetPort: 8545
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dinari-testnet-metrics
+  namespace: dinari-testnet
+spec:
+  type: ClusterIP
+  selector:
+    app: dinari-blockchain
+    network: testnet
+  ports:
+  - name: metrics
+    port: 9090
+    targetPort: 9090

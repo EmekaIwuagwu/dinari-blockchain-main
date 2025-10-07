@@ -1,0 +1,92 @@
+# ==============================================================================
+# DinariBlockchain - Monitoring (Prometheus)
+# Requires Prometheus Operator installed
+# ==============================================================================
+
+---
+# ServiceMonitor for mainnet nodes
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: dinari-mainnet-monitor
+  namespace: dinari-mainnet
+  labels:
+    app: dinari-blockchain
+    network: mainnet
+    prometheus: kube-prometheus
+spec:
+  selector:
+    matchLabels:
+      app: dinari-blockchain
+      network: mainnet
+      component: metrics
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+    scheme: http
+
+---
+# ServiceMonitor for testnet
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: dinari-testnet-monitor
+  namespace: dinari-testnet
+  labels:
+    app: dinari-blockchain
+    network: testnet
+spec:
+  selector:
+    matchLabels:
+      app: dinari-blockchain
+      network: testnet
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+
+---
+# PrometheusRule for alerts
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: dinari-blockchain-alerts
+  namespace: dinari-mainnet
+  labels:
+    app: dinari-blockchain
+    prometheus: kube-prometheus
+spec:
+  groups:
+  - name: dinari-blockchain
+    interval: 30s
+    rules:
+    # Node down alert
+    - alert: DinariNodeDown
+      expr: up{job="dinari-mainnet-metrics"} == 0
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Dinari node {{ $labels.instance }} is down"
+        description: "Node has been down for more than 5 minutes"
+    
+    # Block height not increasing
+    - alert: DinariBlockHeightStalled
+      expr: rate(dinari_block_height[5m]) == 0
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Block height not increasing"
+        description: "No new blocks in 10 minutes"
+    
+    # High memory usage
+    - alert: DinariHighMemory
+      expr: container_memory_usage_bytes{pod=~"dinari-.*"} / container_spec_memory_limit_bytes > 0.9
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High memory usage on {{ $labels.pod }}"
+        description: "Memory usage is above 90%"
