@@ -54,7 +54,7 @@ func (s *Server) handleWalletBalance(params json.RawMessage) (interface{}, *RPCE
 	}
 
 	// Get account
-	account, err := s.blockchain.state.GetAccount(req.Address)
+	account, err := s.blockchain.State.GetAccount(req.Address)
 	if err != nil {
 		s.logger.Error("Failed to get account",
 			zap.String("address", req.Address),
