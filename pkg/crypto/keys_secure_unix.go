@@ -6,7 +6,7 @@ package crypto
 import (
 	"errors"
 	"fmt"
-	"syscall"
+	//"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
