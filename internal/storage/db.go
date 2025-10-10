@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/dgraph-io/badger/v4"
+	"go.uber.org/zap" 
 )
 
 const (
@@ -43,6 +44,9 @@ var (
 type DB struct {
 	db    *badger.DB
 	cache *LRUCache
+
+	logger *zap.Logger
+	path   string
 	
 	// Configuration
 	config *DBConfig
@@ -172,6 +176,10 @@ func NewDB(config *DBConfig) (*DB, error) {
 	fmt.Printf("✅ Database opened: %s (cache: %d entries)\n", config.Path, config.CacheSize)
 	
 	return db, nil
+}
+
+func (db *DB) GetBadger() *badger.DB {
+	return db.db
 }
 
 // Get retrieves a value from the database with caching

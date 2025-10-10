@@ -7,6 +7,10 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
+	"syscall"
+	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
 // SecureKey represents a private key with memory protection
@@ -14,7 +18,7 @@ type SecureKey struct {
 	data     []byte
 	locked   bool
 	mu       sync.RWMutex
-	mlock    bool // Whether memory is locked via mlock/VirtualLock
+	mlock    bool // Whether memory is locked via mlock
 	canary   [8]byte // Stack canary for overflow detection
 }
 
@@ -37,17 +41,42 @@ func NewSecureKey(keyData []byte) (*SecureKey, error) {
 	}
 
 	// Lock memory pages to prevent swapping to disk
-	// Platform-specific implementation in keys_secure_unix.go or keys_secure_windows.go
 	if err := sk.lockMemory(); err != nil {
 		// Log warning but don't fail - some environments don't support mlock
 		fmt.Printf("WARNING: Failed to lock key memory: %v\n", err)
-		fmt.Printf("         Keys may be swapped to disk. Use secure environment.\n")
 	}
 
 	// Register finalizer for cleanup
 	runtime.SetFinalizer(sk, (*SecureKey).Destroy)
 
 	return sk, nil
+}
+
+// lockMemory locks the key's memory pages using mlock
+func (sk *SecureKey) lockMemory() error {
+	sk.mu.Lock()
+	defer sk.mu.Unlock()
+
+	if len(sk.data) == 0 {
+		return errors.New("no data to lock")
+	}
+
+	// Use mlock to prevent swapping
+	ptr := unsafe.Pointer(&sk.data[0])
+	size := uintptr(len(sk.data))
+	
+	if err := unix.Mlock((*[1 << 30]byte)(ptr)[:size:size]); err != nil {
+		return fmt.Errorf("mlock failed: %w", err)
+	}
+
+	// Advise kernel not to dump this memory in core dumps
+	if err := unix.Madvise((*[1 << 30]byte)(ptr)[:size:size], syscall.MADV_DONTDUMP); err != nil {
+		// Non-fatal, just log
+		fmt.Printf("WARNING: madvise MADV_DONTDUMP failed: %v\n", err)
+	}
+
+	sk.mlock = true
+	return nil
 }
 
 // Use executes a function with temporary access to the key
@@ -124,9 +153,11 @@ func (sk *SecureKey) Destroy() {
 	// Wipe the key data
 	sk.wipeBytes(sk.data)
 
-	// Unlock memory if locked (platform-specific)
+	// Unlock memory if locked
 	if sk.mlock {
-		sk.unlockMemory()
+		ptr := unsafe.Pointer(&sk.data[0])
+		size := uintptr(len(sk.data))
+		unix.Munlock((*[1 << 30]byte)(ptr)[:size:size])
 	}
 
 	// Clear the slice

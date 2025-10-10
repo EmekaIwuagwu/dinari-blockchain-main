@@ -3,7 +3,6 @@ package mempool
 import (
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"math/big"

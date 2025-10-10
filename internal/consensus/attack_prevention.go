@@ -238,6 +238,7 @@ func (ap *AttackPrevention) calculateMedianTime() time.Time {
 	return timestamps[mid]
 }
 
+
 // validateDifficulty prevents difficulty manipulation
 func (ap *AttackPrevention) validateDifficulty(block, prevBlock *Block) error {
 	// Calculate expected difficulty
@@ -245,7 +246,7 @@ func (ap *AttackPrevention) validateDifficulty(block, prevBlock *Block) error {
 	
 	// Verify block meets difficulty target
 	blockHash := new(big.Int).SetBytes([]byte(block.Hash))
-	target := new(big.Int).SetUint64(block.Target)
+	target := new(big.Int).SetUint64(uint64(block.Target))  // ✅ FIXED - Cast to uint64
 	
 	if blockHash.Cmp(target) > 0 {
 		return fmt.Errorf("block does not meet difficulty target")
