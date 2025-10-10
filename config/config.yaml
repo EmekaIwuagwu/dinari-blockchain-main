@@ -73,10 +73,10 @@ p2p:
   # Bootstrap peers (mainnet/testnet)
   bootstrap_peers:
     mainnet:
-      - "/ip4/seed1.dinarichain.io/tcp/9000/p2p/QmBootstrap1..."
-      - "/ip4/seed2.dinarichain.io/tcp/9000/p2p/QmBootstrap2..."
+      - "/ip4/seed1.dinariblockchain.network/tcp/9000/p2p/QmBootstrap1..."
+      - "/ip4/seed2.dinariblockchain.network/tcp/9000/p2p/QmBootstrap2..."
     testnet:
-      - "/ip4/testnet-seed1.dinarichain.io/tcp/9000/p2p/QmTestnet1..."
+      - "/ip4/testnet-seed1.dinariblockchain.network/tcp/9000/p2p/QmTestnet1..."
   
   # Connection limits
   max_peers: 50
@@ -272,14 +272,14 @@ rpc:
   cors:
     enabled: true
     allowed_origins:
-      - "https://yourdomain.com"
+      - "https://dinariblockchain.network"
 
 p2p:
   listen_addr: "/ip4/0.0.0.0/tcp/9000"
   bootstrap_peers:
     mainnet:
-      - "/ip4/seed1.dinarichain.io/tcp/9000/p2p/REPLACE_WITH_ACTUAL_PEER_ID"
-      - "/ip4/seed2.dinarichain.io/tcp/9000/p2p/REPLACE_WITH_ACTUAL_PEER_ID"
+      - "/ip4/seed1.dinariblockchain.network/tcp/9000/p2p/REPLACE_WITH_ACTUAL_PEER_ID"
+      - "/ip4/seed2.dinariblockchain.network/tcp/9000/p2p/REPLACE_WITH_ACTUAL_PEER_ID"
 
 mining:
   enabled: false  # Only enable on dedicated mining nodes

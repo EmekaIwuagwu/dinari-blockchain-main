@@ -73,9 +73,9 @@ p2p:
   enable_dht: true
   bootstrap_nodes:
     # PRODUCTION: Add real mainnet bootstrap nodes
-    - "/dns4/seed1.dinari.network/tcp/26656/p2p/PEER_ID_1"
-    - "/dns4/seed2.dinari.network/tcp/26656/p2p/PEER_ID_2"
-    - "/dns4/seed3.dinari.network/tcp/26656/p2p/PEER_ID_3"
+    - "/dns4/seed1.dinariblockchain.network/tcp/26656/p2p/PEER_ID_1"
+    - "/dns4/seed2.dinariblockchain.network/tcp/26656/p2p/PEER_ID_2"
+    - "/dns4/seed3.dinariblockchain.network/tcp/26656/p2p/PEER_ID_3"
   
   # Connection settings
   dial_timeout: 15s
@@ -134,8 +134,8 @@ rpc:
   cors:
     enabled: true
     allowed_origins:
-      - "https://wallet.dinari.network"
-      - "https://explorer.dinari.network"
+      - "https://wallet.dinariblockchain.network"
+      - "https://explorer.dinariblockchain.network"
     allowed_methods: ["POST", "GET", "OPTIONS"]
     allowed_headers: ["Content-Type", "Authorization"]
     max_age: 3600
