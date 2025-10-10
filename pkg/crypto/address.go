@@ -13,7 +13,7 @@ import (
 const (
 	// AddressVersion is the version byte for D addresses
 	// 0x00 produces addresses starting with "1"
-	// 0x1E produces addresses starting with "DT"
+	// 0x1E produces addresses starting with "D"
 	// 0x1A produces addresses starting with "D" (some variants)
 	// For clean "D" prefix, we can use 0x1A or test to find exact byte
 	AddressVersion = 0x1E // UPDATE THIS - produces D-prefix

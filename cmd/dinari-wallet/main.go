@@ -223,7 +223,7 @@ func handleMint() {
     if len(os.Args) < 5 {
         fmt.Println("Usage: dinari-wallet mint <private-key> <to-address> <amount>")
         fmt.Println("\nExample:")
-        fmt.Println("  dinari-wallet mint abc123... DT1address... 1000000000")
+        fmt.Println("  dinari-wallet mint abc123... D1address... 1000000000")
         fmt.Println("\nNote:")
         fmt.Println("  - Amount is in satoshis (1 AFC = 100,000,000 satoshis)")
         fmt.Println("  - Only authorized mint authorities can mint AFC")

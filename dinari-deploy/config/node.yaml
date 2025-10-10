@@ -1,0 +1,40 @@
+# DinariBlockchain Node Configuration
+
+# Data directory for blockchain storage
+datadir: ./data
+
+# RPC server configuration
+rpc:
+  address: localhost:8545
+  cors_enabled: true
+
+# P2P network configuration
+p2p:
+  listen_address: /ip4/0.0.0.0/tcp/9000
+  boot_nodes:
+    # - /ip4/1.2.3.4/tcp/9000/p2p/QmBootNode1...
+    # - /ip4/5.6.7.8/tcp/9000/p2p/QmBootNode2...
+
+# Mining configuration
+mining:
+  enabled: true
+  miner_address: "DFSVTrK1N53SeFiKKXRUVKCZKRvmA2xzoU"  # D-prefixed address to receive mining rewards
+
+# Logging configuration
+logging:
+  level: info  # debug, info, warn, error
+  format: console  # console or json
+
+# Genesis configuration
+genesis:
+  file: ./config/genesis.json
+
+# Mempool configuration
+mempool:
+  max_size: 10000
+  tx_ttl: 24h
+
+# Consensus parameters (from genesis, but can be overridden)
+consensus:
+  target_block_time: 15
+  difficulty_window: 120

@@ -66,9 +66,9 @@ func TestPublicKeyToAddress(t *testing.T) {
 	pubKey := DerivePublicKey(privKey)
 	address := PublicKeyToAddress(pubKey)
 
-	// Address should start with "DT"
+	// Address should start with "D"
 	assert.True(t, len(address) >= 2)
-	assert.Equal(t, "DT", address[:2])
+	assert.Equal(t, "D", address[:1])
 
 	// Address should be valid
 	err = ValidateAddress(address)
@@ -88,7 +88,7 @@ func TestValidateAddress(t *testing.T) {
 		},
 		{
 			name:    "too short",
-			address: "DT1",
+			address: "D1",
 			wantErr: true,
 		},
 		{
@@ -98,7 +98,7 @@ func TestValidateAddress(t *testing.T) {
 		},
 		{
 			name:    "invalid checksum",
-			address: "DT1abc123def456ghi789",
+			address: "D1abc123def456ghi789",
 			wantErr: true,
 		},
 	}
@@ -223,7 +223,7 @@ func TestEndToEndWalletCreation(t *testing.T) {
 	
 	// 4. Verify address is valid
 	assert.NoError(t, ValidateAddress(address))
-	assert.True(t, address[:2] == "DT")
+	assert.True(t, address[:1] == "D")
 	
 	// 5. Export to WIF
 	wif, err := PrivateKeyToWIF(privKey)

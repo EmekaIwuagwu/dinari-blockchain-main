@@ -1,0 +1,29 @@
+[Unit]
+Description=Dinari Blockchain Mining Node
+After=network-online.target dinari-node.service
+Wants=network-online.target
+Requires=dinari-node.service
+
+[Service]
+Type=simple
+User=dinari
+Group=dinari
+WorkingDirectory=/opt/dinari
+ExecStart=/opt/dinari/bin/dinari-node \
+    --config=/opt/dinari/config/node.yaml \
+    --datadir=/var/lib/dinari/miner-data \
+    --rpc=0.0.0.0:8546 \
+    --p2p=/ip4/0.0.0.0/tcp/9001 \
+    --miner=DPxvxeHsN3qPvenSZd9SQxiwf5bQ7jGhst \
+    --mine \
+    --loglevel=info
+Restart=always
+RestartSec=10
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

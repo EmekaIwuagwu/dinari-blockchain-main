@@ -136,8 +136,8 @@ economics:
   afc:
     controlled_minting: true
     authorized_minters:
-      - "DT1AuthorizedMinter1..."
-      - "DT1AuthorizedMinter2..."
+      - "D1AuthorizedMinter1..."
+      - "D1AuthorizedMinter2..."
     
 # Monitoring & Metrics
 monitoring:

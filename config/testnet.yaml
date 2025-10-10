@@ -17,7 +17,7 @@ network:
       "DB2bn6uXpiFFxmmfVa1fPkAcgEUHMAG9yB":
         dnt: "100000000000"  # 1000 DNT
         afc: "50000000000"   # 500 AFC
-      "DTESTtestTESTtestTESTtestTEST1234":
+      "DESTtestTESTtestTESTtestTEST1234":
         dnt: "50000000000"   # 500 DNT
         afc: "25000000000"   # 250 AFC
     
@@ -26,7 +26,7 @@ network:
     afc:
       # Test addresses - these have no mainnet value
       - "DB2bn6uXpiFFxmmfVa1fPkAcgEUHMAG9yB"
-      - "DTESTtestTESTtestTESTtestTEST1234"
+      - "DESTtestTESTtestTESTtestTEST1234"
     threshold: 1  # Only need 1 signature for testing
     enable_minting: true
 

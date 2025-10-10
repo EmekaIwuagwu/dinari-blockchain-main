@@ -1,0 +1,241 @@
+# config/production.yaml
+# Production configuration for Dinari Blockchain (Battle-Tested Settings)
+
+# Network Configuration
+network:
+  chain_id: 1
+  network_name: "dinari-mainnet"
+  testnet: false
+  
+# Node Configuration
+node:
+  data_dir: "/var/dinari/data"
+  log_level: "info"
+  log_file: "/var/log/dinari/node.log"
+  max_connections: 100
+  connection_timeout: "30s"
+  
+# RPC Server Configuration
+rpc:
+  enabled: true
+  address: "0.0.0.0:8545"
+  cors_origins:
+    - "https://app.dinariblockchain.network"
+    - "https://explorer.dinariblockchain.network"
+  rate_limit: 1000  # requests per minute
+  max_batch_size: 100
+  timeout: "30s"
+  
+# P2P Network Configuration
+p2p:
+  listen_address: "/ip4/0.0.0.0/tcp/9000"
+  bootstrap_nodes:
+    - "/ip4/51.195.12.34/tcp/9000/p2p/12D3KooWBootstrap1"
+    - "/ip4/52.78.145.67/tcp/9000/p2p/12D3KooWBootstrap2"
+    - "/ip4/13.56.234.89/tcp/9000/p2p/12D3KooWBootstrap3"
+  max_peers: 50
+  min_peers: 10
+  discovery_interval: "1m"
+  
+# Mining Configuration
+mining:
+  enabled: false  # Set to true for mining nodes
+  miner_address: ""  # Set your mining address
+  threads: 4
+  gas_floor_target: 8000000
+  gas_ceil_target: 10000000
+  extra_data: "Dinari v1.0.0"
+  
+# Consensus Configuration
+consensus:
+  block_time: "15s"
+  difficulty_adjustment_interval: 120  # blocks
+  initial_difficulty: "0x0000000000000100000000000000000000000000000000000000000000000000"
+  confirmation_depth: 12
+  high_value_confirmations: 24
+  max_orphan_blocks: 100
+  checkpoint_interval: 1000
+  
+# Security Configuration
+security:
+  production_mode: true
+  enable_circuit_breaker: true
+  enable_rate_limiting: true
+  enable_anomaly_detection: true
+  enable_hsm: true
+  hsm_provider: "aws-cloudhsm"  # or "azure-keyvault", "yubihsm", "software"
+  enable_multisig: true
+  encryption_enabled: true
+  
+  # Circuit Breaker Settings
+  circuit_breaker:
+    failure_threshold: 0.5
+    volume_threshold: 100
+    cooldown_period: "5m"
+    monitoring_window: "1m"
+    auto_recovery: true
+    
+  # Rate Limiting
+  rate_limits:
+    global_tps: 1000
+    per_address_tpm: 100  # transactions per minute
+    
+  # Multi-Signature Thresholds
+  multisig:
+    high_value_threshold: "100000000000000"  # 100 DNT (atomic units)
+    very_high_value_threshold: "1000000000000000"  # 1000 DNT
+    required_signatures: 3
+    total_participants: 5
+    signature_timeout: "30m"
+    
+# Storage Configuration
+storage:
+  engine: "badger"
+  data_path: "/var/dinari/data/chaindata"
+  backup_enabled: true
+  backup_path: "/var/dinari/backups"
+  backup_interval: "6h"
+  backup_retention_days: 30
+  encryption_enabled: true
+  compression_enabled: true
+  max_db_size: "500GB"
+  sync_writes: true
+  cache_size: "2GB"
+  
+# Mempool Configuration
+mempool:
+  max_size: 100000
+  max_tx_per_address: 1000
+  min_gas_price: 1000
+  enable_rbf: true  # Replace-By-Fee
+  enable_priority: true
+  tx_expiration: "24h"
+  cleanup_interval: "5m"
+  max_orphan_txs: 10000
+  
+# Transaction Validation
+validation:
+  max_transaction_size: "100KB"
+  max_transaction_age: "24h"
+  min_gas_price: 1000
+  max_gas_limit: 10000000
+  high_value_threshold: "10000000000000"  # 10 DNT
+  max_daily_velocity: "1000000000000000"  # 1000 DNT per address
+  enable_double_spend_check: true
+  enable_blacklist: true
+  
+# Token Economics
+economics:
+  # DINARI (DNT) - Main PoW-mined coin
+  dnt:
+    initial_reward: 50
+    halving_interval: 210000  # blocks (~36.5 days)
+    max_supply: 21000000
+    
+  # Afrocoin (AFC) - Payment token
+  afc:
+    controlled_minting: true
+    authorized_minters:
+      - "D1AuthorizedMinter1..."
+      - "D1AuthorizedMinter2..."
+    
+# Monitoring & Metrics
+monitoring:
+  enabled: true
+  metrics_port: 9090
+  prometheus_enabled: true
+  grafana_dashboard: true
+  alert_webhook: "https://alerts.dinariblockchain.network/webhook"
+  
+  # Health Check Intervals
+  health_check_interval: "30s"
+  
+  # Alerting Thresholds
+  alerts:
+    mempool_size_warning: 50000
+    mempool_size_critical: 80000
+    block_propagation_warning: "30s"
+    peer_count_warning: 5
+    disk_usage_warning: 80  # percentage
+    cpu_usage_warning: 90   # percentage
+    memory_usage_warning: 85  # percentage
+    
+# Backup & Recovery
+backup:
+  enabled: true
+  schedule: "0 */6 * * *"  # Every 6 hours
+  retention_policy:
+    daily: 7
+    weekly: 4
+    monthly: 12
+  remote_backup:
+    enabled: true
+    provider: "s3"  # or "gcs", "azure"
+    bucket: "dinari-backups-prod"
+    region: "us-east-1"
+    encryption: true
+    
+# Performance Tuning
+performance:
+  max_block_size: "2MB"
+  max_transactions_per_block: 10000
+  target_block_time: "15s"
+  mempool_cache_size: "256MB"
+  state_cache_size: "1GB"
+  trie_cache_size: "512MB"
+  gc_interval: "5m"
+  
+# Compliance & Audit
+compliance:
+  audit_logging: true
+  audit_log_path: "/var/log/dinari/audit.log"
+  audit_log_rotation: "daily"
+  audit_log_retention: 365  # days
+  kyc_integration: false
+  aml_screening: false
+  transaction_reporting: true
+  
+# API Configuration
+api:
+  version: "v1"
+  max_request_size: "10MB"
+  request_timeout: "30s"
+  enable_websocket: true
+  websocket_max_connections: 1000
+  
+  # API Rate Limits
+  rate_limits:
+    anonymous: 100  # requests per minute
+    authenticated: 1000
+    
+  # Enabled Methods
+  enabled_methods:
+    - "wallet_create"
+    - "wallet_balance"
+    - "tx_send"
+    - "tx_get"
+    - "chain_getBlock"
+    - "chain_getHeight"
+    - "miner_status"
+    
+# Feature Flags
+features:
+  smart_contracts: false  # Future feature
+  atomic_swaps: false     # Future feature
+  lightning_network: false  # Future feature
+  sharding: false         # Future feature
+  
+# Environment Variables (Reference Only - Set in System)
+environment:
+  DINARI_ENCRYPTION_KEY: "SET_IN_ENVIRONMENT"
+  DINARI_HSM_PIN: "SET_IN_ENVIRONMENT"
+  AWS_ACCESS_KEY_ID: "SET_IN_ENVIRONMENT"
+  AWS_SECRET_ACCESS_KEY: "SET_IN_ENVIRONMENT"
+  ALERT_WEBHOOK_SECRET: "SET_IN_ENVIRONMENT"
+  
+# Legal & Compliance
+legal:
+  terms_of_service_url: "https://dinariblockchain.network/terms"
+  privacy_policy_url: "https://dinariblockchain.network/privacy"
+  license: "MIT"
+  jurisdiction: "International"

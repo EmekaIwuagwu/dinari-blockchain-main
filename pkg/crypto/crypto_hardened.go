@@ -197,7 +197,7 @@ func (km *KeyManager) generateAddress(pubKey *ecdsa.PublicKey) (string, error) {
 	checksum := hash2[:4]
 	addressBytes := append([]byte{0x1E}, hash2[:]...)
 	addressBytes = append(addressBytes, checksum...)
-	return "DT" + base58.Encode(addressBytes), nil
+	return "D" + base58.Encode(addressBytes), nil
 }
 
 func (km *KeyManager) SignTransaction(kp *HardenedKeyPair, txHash []byte, nonce uint64, chainID uint64) ([]byte, error) {

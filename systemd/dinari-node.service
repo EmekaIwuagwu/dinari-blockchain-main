@@ -1,0 +1,53 @@
+# /etc/systemd/system/dinari-node.service
+# Dinari Blockchain Node Service
+
+[Unit]
+Description=Dinari Blockchain Node
+Documentation=https://docs.dinariblockchain.network
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dinari
+Group=dinari
+
+# Working directory
+WorkingDirectory=/opt/dinari
+
+# Binary and arguments
+ExecStart=/opt/dinari/bin/dinari-node \
+    --config=/opt/dinari/config/node.yaml \
+    --datadir=/var/lib/dinari/data \
+    --rpc=0.0.0.0:8545 \
+    --p2p=/ip4/0.0.0.0/tcp/9000 \
+    --loglevel=info
+
+# Restart policy
+Restart=always
+RestartSec=10
+StartLimitInterval=200
+StartLimitBurst=5
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/dinari /var/log/dinari
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dinari-node
+
+# Environment
+Environment="DINARI_ENV=production"
+Environment="GOMAXPROCS=4"
+
+[Install]
+WantedBy=multi-user.target

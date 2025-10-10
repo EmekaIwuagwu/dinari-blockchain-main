@@ -1,0 +1,57 @@
+# /etc/systemd/system/dinari-miner.service
+# Dinari Blockchain Mining Node Service
+
+[Unit]
+Description=Dinari Blockchain Mining Node
+Documentation=https://docs.dinariblockchain.network
+After=network-online.target dinari-node.service
+Wants=network-online.target
+Requires=dinari-node.service
+
+[Service]
+Type=simple
+User=dinari
+Group=dinari
+
+# Working directory
+WorkingDirectory=/opt/dinari
+
+# Binary and arguments
+# IMPORTANT: Replace D1YourMinerAddressHere with your REAL miner address
+ExecStart=/opt/dinari/bin/dinari-node \
+    --config=/opt/dinari/config/node.yaml \
+    --datadir=/var/lib/dinari/miner-data \
+    --rpc=0.0.0.0:8546 \
+    --p2p=/ip4/0.0.0.0/tcp/9001 \
+    --miner=DPxvxeHsN3qPvenSZd9SQxiwf5bQ7jGhst \
+    --mine \
+    --loglevel=info
+
+# Restart policy
+Restart=always
+RestartSec=10
+StartLimitInterval=200
+StartLimitBurst=5
+
+# Resource limits (miners need more)
+LimitNOFILE=65536
+LimitNPROC=8192
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/dinari /var/log/dinari
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dinari-miner
+
+# Environment
+Environment="DINARI_ENV=production"
+Environment="GOMAXPROCS=8"
+
+[Install]
+WantedBy=multi-user.target

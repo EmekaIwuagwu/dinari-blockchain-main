@@ -1,0 +1,26 @@
+[Unit]
+Description=Dinari Blockchain Node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dinari
+Group=dinari
+WorkingDirectory=/opt/dinari
+ExecStart=/opt/dinari/bin/dinari-node \
+    --config=/opt/dinari/config/node.yaml \
+    --datadir=/var/lib/dinari/data \
+    --rpc=0.0.0.0:8545 \
+    --p2p=/ip4/0.0.0.0/tcp/9000 \
+    --loglevel=info
+Restart=always
+RestartSec=10
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
