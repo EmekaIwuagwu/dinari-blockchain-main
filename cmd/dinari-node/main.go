@@ -500,22 +500,36 @@ func initializeNode(ctx context.Context, logger *zap.Logger, config *Config) (*N
 	// Initialize RPC server
 	logger.Info("Initializing RPC server")
 	rpcConfig := &api.ServerConfig{
-		ListenAddr:    config.RPCAddr,
-		TLSEnabled:    config.EnableTLS,
-		TLSCertFile:   config.TLSCertFile,
-		TLSKeyFile:    config.TLSKeyFile,
+		ListenAddr:     config.RPCAddr,
+		TLSEnabled:     config.EnableTLS,
+		TLSCertFile:    config.TLSCertFile,
+		TLSKeyFile:     config.TLSKeyFile,
 		RequestTimeout: 30 * time.Second,
-		ReadTimeout:   15 * time.Second,
+		ReadTimeout:    15 * time.Second,
 		MaxRequestSize: 1 << 20,
 	}
 	rpcServer, err := api.NewServer(rpcConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize RPC: %w", err)
 	}
-	
+
 	// Set blockchain and mempool on the RPC server
 	rpcServer.SetBlockchain(blockchain)
 	rpcServer.SetMempool(mempoolInst)
+
+	// ✅ NEW: Register all RPC handlers
+	logger.Info("Registering RPC handlers")
+	rpcServer.RegisterMethod("chain_getHeight", rpcServer.HandleChainGetHeight)
+	rpcServer.RegisterMethod("chain_getBlock", rpcServer.HandleChainGetBlock)
+	rpcServer.RegisterMethod("chain_getStats", rpcServer.HandleChainGetStats)
+
+	rpcServer.RegisterMethod("tx_send", rpcServer.HandleTxSend)
+	rpcServer.RegisterMethod("tx_get", rpcServer.HandleTxGet)
+	rpcServer.RegisterMethod("tx_getPending", rpcServer.HandleTxGetPending)
+
+	rpcServer.RegisterMethod("wallet_create", rpcServer.HandleWalletCreate)
+	rpcServer.RegisterMethod("wallet_balance", rpcServer.HandleWalletBalance)
+
 	node.rpcServer = rpcServer
 
 	// Initialize miner if enabled
@@ -565,8 +579,6 @@ func (n *Node) Start(ctx context.Context) error {
 	// Start RPC server if initialized
 	if n.rpcServer != nil {
 		go func() {
-			// TODO: Find the correct method name (Run, Start, Serve, Listen)
-			// Common patterns: s.Run(), s.Start(), s.Serve(), s.Listen()
 			if err := n.rpcServer.Start(); err != nil {
 				n.logger.Error("Failed to start RPC server", zap.Error(err))
 			}
@@ -604,8 +616,10 @@ func (n *Node) Shutdown(ctx context.Context) error {
 	// Shutdown RPC server
 	if n.rpcServer != nil {
 		n.logger.Info("Shutting down RPC server")
-		// TODO: Call correct shutdown method (Stop, Shutdown, Close)
-		n.logger.Warn("RPC server shutdown method needs to be called")
+		if err := n.rpcServer.Stop(); err != nil {
+			n.logger.Error("RPC shutdown error", zap.Error(err))
+			shutdownErrors = append(shutdownErrors, fmt.Errorf("RPC shutdown: %w", err))
+		}
 	}
 
 	if n.minerService != nil {
