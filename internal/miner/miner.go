@@ -638,8 +638,8 @@ func (m *Miner) updateHashRate() {
 func (m *Miner) createCoinbaseTransaction(height uint64, reward, fees *big.Int) *Transaction {
 	totalReward := new(big.Int).Add(reward, fees)
 	
-	return &Transaction{
-		From:      "COINBASE",
+	tx := &Transaction{
+		From:      "DINARIBASE",
 		To:        m.config.MinerAddress,
 		Amount:    totalReward,
 		TokenType: "DNT",
@@ -648,6 +648,11 @@ func (m *Miner) createCoinbaseTransaction(height uint64, reward, fees *big.Int) 
 		Timestamp: time.Now().Unix(),
 		Data:      m.config.CoinbaseMessage,
 	}
+	
+	// Calculate hash for coinbase transaction
+	tx.Hash = HashTransaction(tx)
+	
+	return tx
 }
 
 func (m *Miner) calculateBlockReward(height uint64) *big.Int {
@@ -745,4 +750,20 @@ func formatAmount(amount *big.Int) string {
 	}
 	
 	return fmt.Sprintf("%s.%08d", dnt.String(), remainder.Uint64())
+}
+
+// HashTransaction creates a hash for a transaction
+func HashTransaction(tx *Transaction) []byte {
+	h := sha256.New()
+	h.Write([]byte(tx.From))
+	h.Write([]byte(tx.To))
+	h.Write(tx.Amount.Bytes())
+	h.Write([]byte(tx.TokenType))
+	h.Write(tx.FeeDNT.Bytes())
+	h.Write([]byte(fmt.Sprintf("%d", tx.Nonce)))
+	h.Write([]byte(fmt.Sprintf("%d", tx.Timestamp)))
+	if len(tx.Data) > 0 {
+		h.Write(tx.Data)
+	}
+	return h.Sum(nil)
 }
