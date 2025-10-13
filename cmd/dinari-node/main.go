@@ -567,7 +567,9 @@ func (n *Node) Start(ctx context.Context) error {
 		go func() {
 			// TODO: Find the correct method name (Run, Start, Serve, Listen)
 			// Common patterns: s.Run(), s.Start(), s.Serve(), s.Listen()
-			n.logger.Warn("RPC server start method needs to be called - check api.Server methods")
+			if err := n.rpcServer.Start(); err != nil {
+				n.logger.Error("Failed to start RPC server", zap.Error(err))
+			}
 		}()
 		n.logger.Info("RPC server configured", zap.String("address", n.config.RPCAddr))
 	}
@@ -652,7 +654,7 @@ func (n *Node) Shutdown(ctx context.Context) error {
 }
 
 func (n *Node) HealthCheck() error {
-	if n.blockchain.GetHeight() == 0 {
+	if n.blockchain == nil {
 		return errors.New("blockchain not initialized")
 	}
 
@@ -684,7 +686,7 @@ func (n *Node) setupMetricsServer() error {
 	})
 
 	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
-		if n.blockchain.GetHeight() == 0 {
+		if n.blockchain == nil {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			fmt.Fprint(w, "not ready: blockchain not initialized")
 			return
