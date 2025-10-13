@@ -506,6 +506,7 @@ func initializeNode(ctx context.Context, logger *zap.Logger, config *Config) (*N
 		TLSKeyFile:    config.TLSKeyFile,
 		RequestTimeout: 30 * time.Second,
 		ReadTimeout:   15 * time.Second,
+		MaxRequestSize: 1 << 20,
 	}
 	rpcServer, err := api.NewServer(rpcConfig)
 	if err != nil {
