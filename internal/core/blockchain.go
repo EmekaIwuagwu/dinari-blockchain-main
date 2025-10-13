@@ -455,18 +455,21 @@ func (bc *Blockchain) validateBlockTransactions(block *Block) error {
 }
 
 // validateCoinbase validates the coinbase transaction
+// validateCoinbase validates the coinbase transaction
 func (bc *Blockchain) validateCoinbase(tx *types.Transaction, height uint64) error {
 	// Calculate expected block reward
 	expectedReward := bc.calculateBlockReward(height)
 	
-	// Coinbase should have zero fees and specific amount
-	if tx.Amount.Cmp(expectedReward) > 0 {
-		return fmt.Errorf("%w: expected %s, got %s", ErrInvalidBlockReward, expectedReward.String(), tx.Amount.String())
+	// Coinbase amount should be AT LEAST the block reward (can include fees)
+	// For early blocks with no transactions, it will equal the reward
+	if tx.Amount.Cmp(expectedReward) < 0 {
+		return fmt.Errorf("%w: amount too low, expected at least %s, got %s", 
+			ErrInvalidBlockReward, expectedReward.String(), tx.Amount.String())
 	}
 	
 	// Coinbase has no sender (from is empty or special address)
 	if tx.From != "" && tx.From != "COINBASE" {
-		return errors.New("coinbase must have empty or COINBASE sender")
+		return fmt.Errorf("coinbase must have empty or COINBASE sender, got: %s", tx.From)
 	}
 	
 	return nil

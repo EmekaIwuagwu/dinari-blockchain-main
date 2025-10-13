@@ -639,18 +639,29 @@ func (m *Miner) createCoinbaseTransaction(height uint64, reward, fees *big.Int) 
 	totalReward := new(big.Int).Add(reward, fees)
 	
 	tx := &Transaction{
-		From:      "DINARIBASE",
+		From:      "", // Empty sender for coinbase
 		To:        m.config.MinerAddress,
 		Amount:    totalReward,
 		TokenType: "DNT",
 		FeeDNT:    big.NewInt(0),
-		Nonce:     height, // Use height as nonce for coinbase
+		Nonce:     height,
 		Timestamp: time.Now().Unix(),
 		Data:      m.config.CoinbaseMessage,
 	}
 	
 	// Calculate hash for coinbase transaction
-	tx.Hash = HashTransaction(tx)
+	h := sha256.New()
+	h.Write([]byte(tx.From))
+	h.Write([]byte(tx.To))
+	h.Write(tx.Amount.Bytes())
+	h.Write([]byte(tx.TokenType))
+	h.Write(tx.FeeDNT.Bytes())
+	h.Write([]byte(fmt.Sprintf("%d", tx.Nonce)))
+	h.Write([]byte(fmt.Sprintf("%d", tx.Timestamp)))
+	if len(tx.Data) > 0 {
+		h.Write(tx.Data)
+	}
+	tx.Hash = h.Sum(nil)
 	
 	return tx
 }
