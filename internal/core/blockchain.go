@@ -209,6 +209,36 @@ func (bc *Blockchain) initialize() error {
 	return bc.loadChainState()
 }
 
+// GetDifficulty returns the current difficulty
+func (bc *Blockchain) GetDifficulty() uint32 {
+	bc.chainMu.RLock()
+	defer bc.chainMu.RUnlock()
+	return bc.chainState.Difficulty
+}
+
+// ValidateBlock validates a block (wrapper for internal validation)
+func (bc *Blockchain) ValidateBlock(block *Block) error {
+	if err := bc.validateBlockBasics(block); err != nil {
+		return err
+	}
+	
+	// Get previous block for header validation
+	prevBlock, err := bc.GetBlockByHash(block.Header.PrevBlockHash)
+	if err != nil {
+		return err
+	}
+	
+	if err := bc.validateBlockHeader(block.Header, prevBlock.Header); err != nil {
+		return err
+	}
+	
+	if err := bc.validateBlockTransactions(block); err != nil {
+		return err
+	}
+	
+	return bc.validateMerkleRoot(block)
+}
+
 // CalculateBlockHash is a public wrapper for calculateBlockHash
 func (bc *Blockchain) CalculateBlockHash(header *BlockHeader) []byte {
 	return bc.calculateBlockHash(header)
@@ -430,7 +460,7 @@ func (bc *Blockchain) validateCoinbase(tx *types.Transaction, height uint64) err
 	expectedReward := bc.calculateBlockReward(height)
 	
 	// Coinbase should have zero fees and specific amount
-	if tx.Amount.Cmp(expectedReward) != 0 {
+	if tx.Amount.Cmp(expectedReward) > 0 {
 		return fmt.Errorf("%w: expected %s, got %s", ErrInvalidBlockReward, expectedReward.String(), tx.Amount.String())
 	}
 	

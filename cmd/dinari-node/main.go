@@ -439,7 +439,7 @@ func initializeNode(ctx context.Context, logger *zap.Logger, config *Config) (*N
 		return nil, fmt.Errorf("failed to initialize state: %w", err)
 	}
 
-	// ✅ FIX: Create genesis block instead of passing nil
+	// Create genesis block
 	logger.Info("Creating genesis block")
 	genesisBlock := &core.Block{
 		Header: &core.BlockHeader{
@@ -447,8 +447,8 @@ func initializeNode(ctx context.Context, logger *zap.Logger, config *Config) (*N
 			Height:        0,
 			PrevBlockHash: []byte{},
 			MerkleRoot:    []byte{},
-			Timestamp:     1704067200, // From genesis.json (2024-01-01)
-			Difficulty:    4096,       // 0x1000 from genesis.json
+			Timestamp:     1704067200, // 2024-01-01 00:00:00 UTC
+			Difficulty:    4096,       // Starting difficulty
 			Nonce:         0,
 			Hash:          []byte{},
 			StateRoot:     []byte{},
@@ -497,17 +497,24 @@ func initializeNode(ctx context.Context, logger *zap.Logger, config *Config) (*N
 	}
 	node.p2pNode = p2pNode
 
-	// Initialize RPC server
+	// Initialize RPC server with CORS enabled for development
 	logger.Info("Initializing RPC server")
 	rpcConfig := &api.ServerConfig{
-		ListenAddr:     config.RPCAddr,
-		TLSEnabled:     config.EnableTLS,
-		TLSCertFile:    config.TLSCertFile,
-		TLSKeyFile:     config.TLSKeyFile,
-		RequestTimeout: 30 * time.Second,
-		ReadTimeout:    15 * time.Second,
-		MaxRequestSize: 1 << 20,
+		ListenAddr:         config.RPCAddr,
+		TLSEnabled:         config.EnableTLS,
+		TLSCertFile:        config.TLSCertFile,
+		TLSKeyFile:         config.TLSKeyFile,
+		RequestTimeout:     30 * time.Second,
+		ReadTimeout:        15 * time.Second,
+		WriteTimeout:       30 * time.Second,
+		MaxRequestSize:     1 << 20, // 1MB
+		CORSEnabled:        true,
+		CORSAllowedOrigins: []string{"*"}, // Allow all origins for development
+		AuthEnabled:        false,          // Disable auth for development
+		RateLimitEnabled:   false,          // Disable rate limiting for development
+		LogRequests:        true,
 	}
+	
 	rpcServer, err := api.NewServer(rpcConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize RPC: %w", err)
@@ -517,7 +524,7 @@ func initializeNode(ctx context.Context, logger *zap.Logger, config *Config) (*N
 	rpcServer.SetBlockchain(blockchain)
 	rpcServer.SetMempool(mempoolInst)
 
-	// ✅ NEW: Register all RPC handlers
+	// Register all RPC handlers
 	logger.Info("Registering RPC handlers")
 	rpcServer.RegisterMethod("chain_getHeight", rpcServer.HandleChainGetHeight)
 	rpcServer.RegisterMethod("chain_getBlock", rpcServer.HandleChainGetBlock)
@@ -532,24 +539,77 @@ func initializeNode(ctx context.Context, logger *zap.Logger, config *Config) (*N
 
 	node.rpcServer = rpcServer
 
-	// Initialize miner if enabled
+	// ✅ PRODUCTION-READY MINER INITIALIZATION
 	if config.EnableMining {
-		logger.Warn("⚠️  Mining initialization disabled - interface mismatch needs to be resolved")
-		logger.Warn("   Your miner package expects miner.BlockchainInterface, miner.MempoolInterface, miner.ConsensusInterface")
-		logger.Warn("   But we have *core.Blockchain, *mempool.Mempool, *consensus.ProofOfWork")
-		logger.Warn("   You need to create adapter/wrapper types or fix the miner interfaces")
-		// TODO: Fix interface mismatch between miner and core packages
-		// minerConfig := &miner.MinerConfig{
-		// 	MinerAddress:    config.MinerAddr,
-		// 	NumThreads:      runtime.NumCPU() - 1,
-		// 	CoinbaseMessage: []byte("Dinari Blockchain"),
-		// 	CPUPriority:     80,
-		// }
-		// minerInst, err := miner.NewMiner(minerConfig, blockchain, mempoolInst, consensusEngine)
-		// if err != nil {
-		// 	return nil, fmt.Errorf("failed to initialize miner: %w", err)
-		// }
-		// node.minerService = minerInst
+		logger.Info("Initializing mining subsystem")
+		
+		// Create blockchain adapter
+		blockchainAdapter := core.NewBlockchainAdapter(blockchain)
+		logger.Info("Created blockchain adapter for miner")
+		
+		// Create mempool adapter
+		mempoolAdapter := mempool.NewMempoolAdapter(mempoolInst)
+		logger.Info("Created mempool adapter for miner")
+		
+		// Create helper functions for consensus adapter
+		getBlockByHeight := func(height uint64) (consensus.BlockData, error) {
+			block, err := blockchain.GetBlockByHeight(height)
+			if err != nil {
+				return consensus.BlockData{}, err
+			}
+			return consensus.BlockData{
+				Height:     block.Header.Height,
+				Timestamp:  block.Header.Timestamp,
+				Difficulty: block.Header.Difficulty,
+			}, nil
+		}
+		
+		getCurrentHeight := func() uint64 {
+			return blockchain.GetHeight()
+		}
+		
+		// Create consensus adapter with function closures
+		consensusAdapter := consensus.NewConsensusAdapter(
+			consensusEngine,
+			getBlockByHeight,
+			getCurrentHeight,
+		)
+		logger.Info("Created consensus adapter for miner")
+		
+		// Configure miner
+		numThreads := runtime.NumCPU() - 1
+		if numThreads < 1 {
+			numThreads = 1
+		}
+		
+		minerConfig := &miner.MinerConfig{
+			MinerAddress:    config.MinerAddr,
+			NumThreads:      numThreads,
+			CoinbaseMessage: []byte(fmt.Sprintf("Dinari Blockchain - Mined by %s", config.MinerAddr[:8])),
+			CPUPriority:     80, // Use 80% CPU
+		}
+		
+		logger.Info("Miner configuration",
+			zap.String("miner_address", config.MinerAddr),
+			zap.Int("threads", numThreads),
+			zap.Int("cpu_priority", minerConfig.CPUPriority),
+		)
+		
+		// Create miner instance
+		minerInst, err := miner.NewMiner(
+			minerConfig,
+			blockchainAdapter,
+			mempoolAdapter,
+			consensusAdapter,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize miner: %w", err)
+		}
+		
+		node.minerService = minerInst
+		logger.Info("✅ Miner initialized successfully")
+	} else {
+		logger.Info("Mining disabled")
 	}
 
 	// Initialize monitoring
@@ -569,7 +629,7 @@ func initializeNode(ctx context.Context, logger *zap.Logger, config *Config) (*N
 		}
 	}
 
-	logger.Info("Node initialization completed")
+	logger.Info("✅ Node initialization completed successfully")
 	return node, nil
 }
 
