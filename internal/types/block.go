@@ -5,42 +5,39 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
-	"math/big"
 	"time"
 )
 
 // BlockHeader contains the metadata of a block
 type BlockHeader struct {
-	Number       uint64   `json:"number"`
-	ParentHash   [32]byte `json:"parentHash"`
-	Timestamp    int64    `json:"timestamp"`
-	Difficulty   *big.Int `json:"difficulty"`
-	Nonce        uint64   `json:"nonce"`
-	MerkleRoot   [32]byte `json:"merkleRoot"`
-	StateRoot    [32]byte `json:"stateRoot"`
-	MinerAddress string   `json:"miner"`
-	TxCount      uint32   `json:"txCount"`
+	Version       uint32   `json:"version"`
+	Height        uint64   `json:"height"`
+	PrevBlockHash []byte   `json:"prevBlockHash"`
+	MerkleRoot    []byte   `json:"merkleRoot"`
+	Timestamp     int64    `json:"timestamp"`
+	Difficulty    uint32   `json:"difficulty"`
+	Nonce         uint64   `json:"nonce"`
+	Hash          []byte   `json:"hash"`
+	StateRoot     []byte   `json:"stateRoot"`
 }
 
 // Block represents a complete block in the blockchain
 type Block struct {
 	Header       *BlockHeader   `json:"header"`
 	Transactions []*Transaction `json:"transactions"`
-	Hash         [32]byte       `json:"hash"`
 }
 
 // NewBlock creates a new block with the given parameters
-func NewBlock(parentHash [32]byte, number uint64, transactions []*Transaction, miner string, difficulty *big.Int) *Block {
+func NewBlock(prevHash []byte, height uint64, transactions []*Transaction, difficulty uint32) *Block {
 	header := &BlockHeader{
-		Number:       number,
-		ParentHash:   parentHash,
-		Timestamp:    time.Now().Unix(),
-		Difficulty:   difficulty,
-		Nonce:        0,
-		MerkleRoot:   CalculateMerkleRoot(transactions),
-		StateRoot:    [32]byte{}, // Will be set after state changes
-		MinerAddress: miner,
-		TxCount:      uint32(len(transactions)),
+		Version:       1,
+		Height:        height,
+		PrevBlockHash: prevHash,
+		Timestamp:     time.Now().Unix(),
+		Difficulty:    difficulty,
+		Nonce:         0,
+		MerkleRoot:    CalculateMerkleRoot(transactions),
+		StateRoot:     []byte{},
 	}
 
 	block := &Block{
@@ -48,22 +45,21 @@ func NewBlock(parentHash [32]byte, number uint64, transactions []*Transaction, m
 		Transactions: transactions,
 	}
 
-	block.Hash = block.ComputeHash()
+	block.Header.Hash = ComputeBlockHash(header)
 	return block
 }
 
 // NewGenesisBlock creates the genesis (first) block
 func NewGenesisBlock() *Block {
 	header := &BlockHeader{
-		Number:       0,
-		ParentHash:   [32]byte{},
-		Timestamp:    time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC).Unix(),
-		Difficulty:   big.NewInt(0x1000), // Initial difficulty
-		Nonce:        0,
-		MerkleRoot:   [32]byte{},
-		StateRoot:    [32]byte{},
-		MinerAddress: "genesis",
-		TxCount:      0,
+		Version:       1,
+		Height:        0,
+		PrevBlockHash: []byte{},
+		Timestamp:     time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC).Unix(),
+		Difficulty:    1000, // Initial difficulty
+		Nonce:         0,
+		MerkleRoot:    []byte{},
+		StateRoot:     []byte{},
 	}
 
 	block := &Block{
@@ -71,52 +67,39 @@ func NewGenesisBlock() *Block {
 		Transactions: []*Transaction{},
 	}
 
-	block.Hash = block.ComputeHash()
+	block.Header.Hash = ComputeBlockHash(header)
 	return block
 }
 
-// ComputeHash calculates the block hash using SHA-256d (double SHA-256)
-func (b *Block) ComputeHash() [32]byte {
-	data := b.SerializeHeader()
-	first := sha256.Sum256(data)
+// ComputeBlockHash calculates the block hash using double SHA-256
+func ComputeBlockHash(header *BlockHeader) []byte {
+	var buf bytes.Buffer
+
+	binary.Write(&buf, binary.BigEndian, header.Version)
+	binary.Write(&buf, binary.BigEndian, header.Height)
+	buf.Write(header.PrevBlockHash)
+	buf.Write(header.MerkleRoot)
+	binary.Write(&buf, binary.BigEndian, header.Timestamp)
+	binary.Write(&buf, binary.BigEndian, header.Difficulty)
+	binary.Write(&buf, binary.BigEndian, header.Nonce)
+
+	first := sha256.Sum256(buf.Bytes())
 	second := sha256.Sum256(first[:])
-	return second
+	
+	return second[:]
 }
 
 // SerializeHeader serializes the block header for hashing
 func (b *Block) SerializeHeader() []byte {
 	var buf bytes.Buffer
 
-	// Number (8 bytes)
-	binary.Write(&buf, binary.BigEndian, b.Header.Number)
-
-	// ParentHash (32 bytes)
-	buf.Write(b.Header.ParentHash[:])
-
-	// Timestamp (8 bytes)
+	binary.Write(&buf, binary.BigEndian, b.Header.Version)
+	binary.Write(&buf, binary.BigEndian, b.Header.Height)
+	buf.Write(b.Header.PrevBlockHash)
+	buf.Write(b.Header.MerkleRoot)
 	binary.Write(&buf, binary.BigEndian, b.Header.Timestamp)
-
-	// Difficulty (variable length, but use fixed 32 bytes)
-	diffBytes := b.Header.Difficulty.Bytes()
-	diffPadded := make([]byte, 32)
-	copy(diffPadded[32-len(diffBytes):], diffBytes)
-	buf.Write(diffPadded)
-
-	// Nonce (8 bytes)
+	binary.Write(&buf, binary.BigEndian, b.Header.Difficulty)
 	binary.Write(&buf, binary.BigEndian, b.Header.Nonce)
-
-	// MerkleRoot (32 bytes)
-	buf.Write(b.Header.MerkleRoot[:])
-
-	// StateRoot (32 bytes)
-	buf.Write(b.Header.StateRoot[:])
-
-	// MinerAddress (hash it to fixed size)
-	minerHash := sha256.Sum256([]byte(b.Header.MinerAddress))
-	buf.Write(minerHash[:])
-
-	// TxCount (4 bytes)
-	binary.Write(&buf, binary.BigEndian, b.Header.TxCount)
 
 	return buf.Bytes()
 }
@@ -136,32 +119,28 @@ func DeserializeBlock(data []byte) (*Block, error) {
 }
 
 // CalculateMerkleRoot computes the merkle root of transactions
-func CalculateMerkleRoot(transactions []*Transaction) [32]byte {
+func CalculateMerkleRoot(transactions []*Transaction) []byte {
 	if len(transactions) == 0 {
-		return [32]byte{}
+		return make([]byte, 32)
 	}
 
 	// Collect transaction hashes
-	hashes := make([][32]byte, len(transactions))
+	hashes := make([][]byte, len(transactions))
 	for i, tx := range transactions {
-		hashes[i] = tx.Hash
+		hashes[i] = tx.Hash[:]
 	}
 
 	// Build merkle tree bottom-up
 	for len(hashes) > 1 {
-		var newLevel [][32]byte
+		if len(hashes)%2 != 0 {
+			hashes = append(hashes, hashes[len(hashes)-1])
+		}
 
-		// Process pairs
+		var newLevel [][]byte
 		for i := 0; i < len(hashes); i += 2 {
-			if i+1 < len(hashes) {
-				// Hash pair
-				combined := append(hashes[i][:], hashes[i+1][:]...)
-				newLevel = append(newLevel, sha256.Sum256(combined))
-			} else {
-				// Odd one out, hash with itself
-				combined := append(hashes[i][:], hashes[i][:]...)
-				newLevel = append(newLevel, sha256.Sum256(combined))
-			}
+			combined := append(hashes[i], hashes[i+1]...)
+			hash := sha256.Sum256(combined)
+			newLevel = append(newLevel, hash[:])
 		}
 
 		hashes = newLevel
@@ -172,7 +151,7 @@ func CalculateMerkleRoot(transactions []*Transaction) [32]byte {
 
 // IsGenesis returns true if this is the genesis block
 func (b *Block) IsGenesis() bool {
-	return b.Header.Number == 0
+	return b.Header.Height == 0
 }
 
 // Size returns the approximate size of the block in bytes
@@ -189,20 +168,15 @@ func (b *Block) Validate() error {
 		return ErrInvalidTimestamp
 	}
 
-	// Check transaction count matches
-	if b.Header.TxCount != uint32(len(b.Transactions)) {
-		return ErrInvalidTxCount
-	}
-
 	// Verify merkle root
 	calculatedRoot := CalculateMerkleRoot(b.Transactions)
-	if calculatedRoot != b.Header.MerkleRoot {
+	if !bytes.Equal(calculatedRoot, b.Header.MerkleRoot) {
 		return ErrInvalidMerkleRoot
 	}
 
 	// Verify block hash
-	calculatedHash := b.ComputeHash()
-	if calculatedHash != b.Hash {
+	calculatedHash := ComputeBlockHash(b.Header)
+	if !bytes.Equal(calculatedHash, b.Header.Hash) {
 		return ErrInvalidBlockHash
 	}
 

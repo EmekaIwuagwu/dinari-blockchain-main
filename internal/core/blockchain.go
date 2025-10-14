@@ -74,25 +74,6 @@ var (
 	ErrGenesisBlockMismatch = errors.New("genesis block mismatch")
 )
 
-// Block represents a blockchain block
-type Block struct {
-	Header       *BlockHeader   `json:"header"`
-	Transactions []*types.Transaction `json:"transactions"`
-}
-
-// BlockHeader contains block metadata
-type BlockHeader struct {
-	Version       uint32   `json:"version"`
-	Height        uint64   `json:"height"`
-	PrevBlockHash []byte   `json:"prevBlockHash"`
-	MerkleRoot    []byte   `json:"merkleRoot"`
-	Timestamp     int64    `json:"timestamp"`
-	Difficulty    uint32   `json:"difficulty"`
-	Nonce         uint64   `json:"nonce"`
-	Hash          []byte   `json:"hash"`
-	StateRoot     []byte   `json:"stateRoot"` // Root of state merkle tree
-}
-
 // ChainState tracks the current chain state
 type ChainState struct {
 	Height       uint64   `json:"height"`
@@ -135,6 +116,9 @@ type Blockchain struct {
 	stats BlockchainStats
 	statsMu sync.Mutex
 }
+
+type Block = types.Block
+type BlockHeader = types.BlockHeader
 
 // BlockchainStats tracks blockchain statistics
 type BlockchainStats struct {
@@ -306,51 +290,44 @@ func (bc *Blockchain) AddBlock(block *Block) error {
 	bc.chainMu.Lock()
 	defer bc.chainMu.Unlock()
 	
-	// 1. Basic validation
-	if err := bc.validateBlockBasics(block); err != nil {
+	// Comprehensive validation
+	if err := bc.ValidateBlockComprehensive(block); err != nil {
 		bc.incrementRejected()
-		return fmt.Errorf("basic validation failed: %w", err)
+		return fmt.Errorf("block validation failed: %w", err)
 	}
 	
-	// 2. Check for duplicate
+	// Check for duplicate
 	if bc.hasBlock(block.Header.Hash) {
 		return ErrDuplicateBlock
 	}
 	
-	// 3. Check if previous block exists
+	// Check if previous block exists (orphan check)
 	prevBlock, err := bc.GetBlockByHash(block.Header.PrevBlockHash)
 	if err != nil {
-		// Previous block not found - add to orphan pool
+		if block.Header.Height == 0 {
+			// Genesis block
+			return bc.addBlockToMainChain(block)
+		}
+		// Orphan block
 		return bc.addOrphanBlock(block)
 	}
 	
-	// 4. Validate block header
-	if err := bc.validateBlockHeader(block.Header, prevBlock.Header); err != nil {
-		bc.incrementRejected()
-		return fmt.Errorf("header validation failed: %w", err)
-	}
+	// Log acceptance
+	fmt.Printf("✅ Block #%d validated successfully\n", block.Header.Height)
+	fmt.Printf("   Hash: %x\n", block.Header.Hash[:8])
+	fmt.Printf("   Timestamp: %d (interval: %d sec)\n", 
+		block.Header.Timestamp, block.Header.Timestamp-prevBlock.Header.Timestamp)
+	fmt.Printf("   Difficulty: %d\n", block.Header.Difficulty)
+	fmt.Printf("   Transactions: %d\n", len(block.Transactions))
 	
-	// 5. Validate transactions
-	if err := bc.validateBlockTransactions(block); err != nil {
-		bc.incrementRejected()
-		return fmt.Errorf("transaction validation failed: %w", err)
-	}
-	
-	// 6. Validate merkle root
-	if err := bc.validateMerkleRoot(block); err != nil {
-		bc.incrementRejected()
-		return fmt.Errorf("merkle root validation failed: %w", err)
-	}
-	
-	// 7. Check if this extends the best chain
+	// Check if this extends the best chain
 	isMainChain := bytes.Equal(block.Header.PrevBlockHash, bc.chainState.BestHash)
 	
 	if isMainChain {
-		// Extends main chain - add directly
 		return bc.addBlockToMainChain(block)
 	}
 	
-	// Side chain - check if it becomes the new best chain
+	// Side chain
 	return bc.handleSideChain(block)
 }
 
@@ -394,30 +371,68 @@ func (bc *Blockchain) validateBlockBasics(block *Block) error {
 
 // validateBlockHeader validates block header against previous block
 func (bc *Blockchain) validateBlockHeader(header, prevHeader *BlockHeader) error {
-	// Check height
+	// 1. Validate height progression
 	if header.Height != prevHeader.Height+1 {
-		return fmt.Errorf("invalid height: expected %d, got %d", prevHeader.Height+1, header.Height)
+		return fmt.Errorf("invalid height: expected %d, got %d", 
+			prevHeader.Height+1, header.Height)
 	}
 	
-	// Check previous hash
+	// 2. Validate previous hash
 	if !bytes.Equal(header.PrevBlockHash, prevHeader.Hash) {
 		return ErrInvalidPrevHash
 	}
 	
-	// Check timestamp (must be after previous block)
-	if header.Timestamp <= prevHeader.Timestamp {
-		return ErrInvalidTimestamp
+	// 3. CRITICAL: Strict timestamp validation
+	if err := bc.validateTimestamp(header, prevHeader); err != nil {
+		return err
 	}
 	
-	// Check difficulty
+	// 4. Validate difficulty
 	expectedDifficulty := bc.calculateNextDifficulty(prevHeader)
 	if header.Difficulty != expectedDifficulty {
-		return fmt.Errorf("%w: expected %d, got %d", ErrInvalidDifficulty, expectedDifficulty, header.Difficulty)
+		return fmt.Errorf("%w: expected %d, got %d", 
+			ErrInvalidDifficulty, expectedDifficulty, header.Difficulty)
 	}
 	
-	// Validate Proof of Work
+	// 5. Validate Proof of Work
 	if !bc.validateProofOfWork(header) {
 		return errors.New("invalid proof of work")
+	}
+	
+	return nil
+}
+
+func (bc *Blockchain) validateTimestamp(header, prevHeader *BlockHeader) error {
+	now := time.Now().Unix()
+	
+	if header.Timestamp <= 0 {
+		return fmt.Errorf("%w: timestamp must be positive", ErrInvalidTimestamp)
+	}
+	
+	maxFutureTime := now + int64(2*time.Minute.Seconds())
+	if header.Timestamp > maxFutureTime {
+		return fmt.Errorf("%w: block %d seconds in future (max 120 seconds allowed)", 
+			ErrInvalidTimestamp, header.Timestamp-now)
+	}
+	
+	if header.Timestamp <= prevHeader.Timestamp {
+		return fmt.Errorf("%w: timestamp must increase (current: %d, previous: %d)", 
+			ErrInvalidTimestamp, header.Timestamp, prevHeader.Timestamp)
+	}
+	
+	// CRITICAL: Enforce minimum 15-second block interval
+	timeDiff := header.Timestamp - prevHeader.Timestamp
+	minInterval := int64(TargetBlockTime.Seconds())
+	
+	if timeDiff < minInterval {
+		return fmt.Errorf("%w: block interval too small - got %d seconds, required %d seconds minimum", 
+			ErrInvalidTimestamp, timeDiff, minInterval)
+	}
+	
+	maxInterval := int64(10 * TargetBlockTime.Seconds())
+	if timeDiff > maxInterval {
+		return fmt.Errorf("%w: block interval too large - got %d seconds, maximum %d seconds", 
+			ErrInvalidTimestamp, timeDiff, maxInterval)
 	}
 	
 	return nil
@@ -517,11 +532,58 @@ func (bc *Blockchain) validateMerkleRoot(block *Block) error {
 
 // validateProofOfWork validates the block's proof of work
 func (bc *Blockchain) validateProofOfWork(header *BlockHeader) bool {
-	// Check if hash meets difficulty target
+	// Calculate target from difficulty
 	target := bc.difficultyToTarget(header.Difficulty)
+	
+	// Convert hash to big int
 	hashInt := new(big.Int).SetBytes(header.Hash)
 	
-	return hashInt.Cmp(target) <= 0
+	// Hash must be less than or equal to target
+	valid := hashInt.Cmp(target) <= 0
+	
+	if !valid {
+		fmt.Printf("❌ PoW validation failed for block %d:\n", header.Height)
+		fmt.Printf("   Hash:   %x\n", header.Hash[:8])
+		fmt.Printf("   Target: %x\n", target.Bytes()[:8])
+		fmt.Printf("   Difficulty: %d\n", header.Difficulty)
+	}
+	
+	return valid
+}
+
+
+func (bc *Blockchain) ValidateBlockComprehensive(block *Block) error {
+	// 1. Basic validation
+	if err := bc.validateBlockBasics(block); err != nil {
+		return fmt.Errorf("basic validation failed: %w", err)
+	}
+	
+	// 2. Get previous block
+	prevBlock, err := bc.GetBlockByHash(block.Header.PrevBlockHash)
+	if err != nil {
+		if block.Header.Height == 0 {
+			// Genesis block - skip previous block checks
+			return nil
+		}
+		return fmt.Errorf("previous block not found: %w", err)
+	}
+	
+	// 3. Header validation (includes strict timestamp check)
+	if err := bc.validateBlockHeader(block.Header, prevBlock.Header); err != nil {
+		return fmt.Errorf("header validation failed: %w", err)
+	}
+	
+	// 4. Transaction validation
+	if err := bc.validateBlockTransactions(block); err != nil {
+		return fmt.Errorf("transaction validation failed: %w", err)
+	}
+	
+	// 5. Merkle root validation
+	if err := bc.validateMerkleRoot(block); err != nil {
+		return fmt.Errorf("merkle root validation failed: %w", err)
+	}
+	
+	return nil
 }
 
 // addBlockToMainChain adds a block to the main chain and updates state
@@ -564,7 +626,10 @@ func (bc *Blockchain) addBlockToMainChain(block *Block) error {
 	}
 	
 	fmt.Printf("✅ Block #%d added to main chain (%d txs)\n", block.Header.Height, len(block.Transactions))
-	
+	fmt.Printf("   📦 Hash:     %x\n", block.Header.Hash)
+	fmt.Printf("   🔗 Previous: %x\n", block.Header.PrevBlockHash)
+	fmt.Printf("   🌳 Merkle:   %x\n", block.Header.MerkleRoot[:16])
+		
 	return nil
 }
 
@@ -699,34 +764,101 @@ func (bc *Blockchain) calculateBlockReward(height uint64) *big.Int {
 }
 
 func (bc *Blockchain) calculateNextDifficulty(prevHeader *BlockHeader) uint32 {
+	nextHeight := prevHeader.Height + 1
+	
 	// Only adjust every DifficultyAdjustmentInterval blocks
-	if (prevHeader.Height+1)%DifficultyAdjustmentInterval != 0 {
+	if nextHeight%DifficultyAdjustmentInterval != 0 {
 		return prevHeader.Difficulty
 	}
 	
-	// Get block from last adjustment
-	adjustmentHeight := prevHeader.Height - DifficultyAdjustmentInterval + 1
-	oldBlock, err := bc.GetBlockByHeight(adjustmentHeight)
-	if err != nil {
-		return prevHeader.Difficulty // Fallback
+	// Need enough blocks for adjustment
+	if nextHeight < DifficultyAdjustmentInterval {
+		return prevHeader.Difficulty
 	}
 	
-	// Calculate actual time taken
+	// Get block from start of adjustment period
+	adjustmentStartHeight := nextHeight - DifficultyAdjustmentInterval
+	oldBlock, err := bc.GetBlockByHeight(adjustmentStartHeight)
+	if err != nil {
+		fmt.Printf("⚠️  Could not get adjustment start block: %v\n", err)
+		return prevHeader.Difficulty // Fallback to previous difficulty
+	}
+	
+	// CRITICAL: Calculate actual time for the interval
 	actualTime := prevHeader.Timestamp - oldBlock.Header.Timestamp
 	expectedTime := int64(DifficultyAdjustmentInterval) * int64(TargetBlockTime.Seconds())
 	
-	// Calculate adjustment (limit to 4x change)
-	adjustment := float64(actualTime) / float64(expectedTime)
-	if adjustment > 4.0 {
-		adjustment = 4.0
-	}
-	if adjustment < 0.25 {
-		adjustment = 0.25
+	// Sanity check
+	if actualTime <= 0 {
+		fmt.Printf("❌ CRITICAL: Invalid actual time %d, keeping difficulty\n", actualTime)
+		return prevHeader.Difficulty
 	}
 	
-	newDifficulty := float64(prevHeader.Difficulty) / adjustment
+	// CRITICAL: Clamp actual time to prevent gaming
+	// Maximum 4x faster or 4x slower than expected
+	minActualTime := expectedTime / 4
+	maxActualTime := expectedTime * 4
 	
-	return uint32(newDifficulty)
+	if actualTime < minActualTime {
+		fmt.Printf("⚠️  Clamping actual time: %d → %d (too fast)\n", actualTime, minActualTime)
+		actualTime = minActualTime
+	}
+	if actualTime > maxActualTime {
+		fmt.Printf("⚠️  Clamping actual time: %d → %d (too slow)\n", actualTime, maxActualTime)
+		actualTime = maxActualTime
+	}
+	
+	// CRITICAL: Calculate new difficulty
+	// If blocks came too fast (actualTime < expectedTime) → increase difficulty
+	// If blocks came too slow (actualTime > expectedTime) → decrease difficulty
+	oldDifficulty := prevHeader.Difficulty
+	
+	// Use big integers for precision
+	newDiffBig := new(big.Int).SetUint64(uint64(oldDifficulty))
+	newDiffBig.Mul(newDiffBig, big.NewInt(expectedTime))
+	newDiffBig.Div(newDiffBig, big.NewInt(actualTime))
+	
+	// Convert back to uint32
+	var newDifficulty uint32
+	if newDiffBig.IsUint64() {
+		newDiff64 := newDiffBig.Uint64()
+		if newDiff64 > 0xFFFFFFFF {
+			newDifficulty = 0xFFFFFFFF
+		} else {
+			newDifficulty = uint32(newDiff64)
+		}
+	} else {
+		newDifficulty = 0xFFFFFFFF
+	}
+	
+	// Enforce minimum difficulty
+	const MinDifficulty = 1000
+	if newDifficulty < MinDifficulty {
+		newDifficulty = MinDifficulty
+	}
+	
+	// Calculate percentage change
+	percentChange := ((float64(newDifficulty) / float64(oldDifficulty)) - 1) * 100
+	
+	fmt.Printf("\n📊 DIFFICULTY ADJUSTMENT at height %d:\n", nextHeight)
+	fmt.Printf("   Period: blocks %d to %d (%d blocks)\n", 
+		adjustmentStartHeight, prevHeader.Height, DifficultyAdjustmentInterval)
+	fmt.Printf("   Expected time: %d seconds (%d blocks × %d sec)\n", 
+		expectedTime, DifficultyAdjustmentInterval, int(TargetBlockTime.Seconds()))
+	fmt.Printf("   Actual time: %d seconds (original: %d sec)\n", 
+		actualTime, prevHeader.Timestamp-oldBlock.Header.Timestamp)
+	fmt.Printf("   Time ratio: %.4f\n", float64(actualTime)/float64(expectedTime))
+	fmt.Printf("   Difficulty: %d → %d (%.2f%% change)\n", 
+		oldDifficulty, newDifficulty, percentChange)
+	
+	if percentChange > 0 {
+		fmt.Printf("   ⬆️  Difficulty INCREASED (blocks were too fast)\n")
+	} else if percentChange < 0 {
+		fmt.Printf("   ⬇️  Difficulty DECREASED (blocks were too slow)\n")
+	}
+	fmt.Println()
+	
+	return newDifficulty
 }
 
 func (bc *Blockchain) difficultyToTarget(difficulty uint32) *big.Int {

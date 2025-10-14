@@ -485,12 +485,6 @@ func (w *MiningWorker) handleBlockFound(template *BlockTemplate, nonce uint64, h
 	w.miner.statsMu.Unlock()
 	
 	fmt.Printf("✅ Block #%d ACCEPTED and added to chain\n", template.Header.Height)
-	fmt.Printf("   📦 Block Hash:    %x\n", hash)
-	fmt.Printf("   🔗 Previous Hash: %x\n", template.Header.PrevBlockHash)
-	fmt.Printf("   💰 Reward: %s DNT | Fees: %s DNT\n", 
-		formatAmount(template.BlockReward), formatAmount(template.TotalFees))
-	fmt.Printf("   ⛏️  Nonce: %d | Difficulty: %d\n", nonce, template.Header.Difficulty)
-	fmt.Printf("   ⏱️  Timestamp: %d\n\n", template.Header.Timestamp)
 	
 	w.miner.stopWorkers()
 }
@@ -559,22 +553,4 @@ func (m *Miner) Stop() {
 	close(m.stopChan)
 	m.wg.Wait()
 	fmt.Println("✅ Miner stopped")
-}
-
-func formatAmount(amount *big.Int) string {
-	if amount == nil {
-		return "0"
-	}
-	// Convert to DNT with 8 decimals
-	// Amount is stored as smallest unit (satoshis)
-	divisor := big.NewInt(100000000) // 1e8
-	quotient := new(big.Int).Div(amount, divisor)
-	remainder := new(big.Int).Mod(amount, divisor)
-	
-	if remainder.Sign() == 0 {
-		return quotient.String()
-	}
-	
-	// Format with decimals
-	return fmt.Sprintf("%s.%08d", quotient.String(), remainder.Int64())
 }

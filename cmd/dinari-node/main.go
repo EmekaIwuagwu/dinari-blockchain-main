@@ -442,19 +442,19 @@ func initializeNode(ctx context.Context, logger *zap.Logger, config *Config) (*N
 	// Create genesis block
 	logger.Info("Creating genesis block")
 	genesisBlock := &core.Block{
-		Header: &core.BlockHeader{
-			Version:       1,
-			Height:        0,
-			PrevBlockHash: []byte{},
-			MerkleRoot:    []byte{},
-			Timestamp:     1704067200, // 2024-01-01 00:00:00 UTC
-			Difficulty:    4096,       // Starting difficulty
-			Nonce:         0,
-			Hash:          []byte{},
-			StateRoot:     []byte{},
-		},
-		Transactions: []*types.Transaction{},
-	}
+	Header: &core.BlockHeader{
+		Version:       1,
+		Height:        0,
+		PrevBlockHash: []byte{},
+		MerkleRoot:    []byte{},
+		Timestamp:     time.Now().Unix(),
+		Difficulty:    16777216, // MUCH HIGHER - should take ~15 seconds
+		Nonce:         0,
+		Hash:          []byte{},
+		StateRoot:     []byte{},
+	},
+	Transactions: []*types.Transaction{},
+}
 
 	// Initialize blockchain with genesis block
 	logger.Info("Initializing blockchain")
@@ -470,9 +470,12 @@ func initializeNode(ctx context.Context, logger *zap.Logger, config *Config) (*N
 	node.mempool = mempoolInst
 
 	// Initialize consensus
+	// Initialize consensus - needs blockchain for difficulty calculation
 	logger.Info("Initializing consensus engine")
-	consensusEngine := consensus.NewProofOfWork()
+	blockchainAdapter := core.NewConsensusBlockchainAdapter(blockchain)
+	consensusEngine := consensus.NewProofOfWork(blockchainAdapter)
 	node.consensus = consensusEngine
+	logger.Info("Consensus engine initialized")
 
 	// Initialize DDoS protection
 	logger.Info("Initializing DDoS protection")
@@ -539,75 +542,37 @@ func initializeNode(ctx context.Context, logger *zap.Logger, config *Config) (*N
 
 	node.rpcServer = rpcServer
 
-	// ✅ PRODUCTION-READY MINER INITIALIZATION
+	// ✅ PRODUCTION-READY MINER INITIALIZATION WITH BLOCK INTERVAL ENFORCEMENT
 	if config.EnableMining {
-		logger.Info("Initializing mining subsystem")
-		
-		// Create blockchain adapter
-		blockchainAdapter := core.NewBlockchainAdapter(blockchain)
-		logger.Info("Created blockchain adapter for miner")
+		logger.Info("🔥 Initializing PRODUCTION mining subsystem with strict 15-second block intervals")
 		
 		// Create mempool adapter
 		mempoolAdapter := mempool.NewMempoolAdapter(mempoolInst)
 		logger.Info("Created mempool adapter for miner")
 		
-		// Create helper functions for consensus adapter
-		getBlockByHeight := func(height uint64) (consensus.BlockData, error) {
-			block, err := blockchain.GetBlockByHeight(height)
-			if err != nil {
-				return consensus.BlockData{}, err
-			}
-			return consensus.BlockData{
-				Height:     block.Header.Height,
-				Timestamp:  block.Header.Timestamp,
-				Difficulty: block.Header.Difficulty,
-			}, nil
+		// Calculate optimal thread count
+		numThreads := runtime.NumCPU()
+		if numThreads > 1 {
+			numThreads-- // Leave one CPU for other operations
 		}
 		
-		getCurrentHeight := func() uint64 {
-			return blockchain.GetHeight()
-		}
-		
-		// Create consensus adapter with function closures
-		consensusAdapter := consensus.NewConsensusAdapter(
-			consensusEngine,
-			getBlockByHeight,
-			getCurrentHeight,
-		)
-		logger.Info("Created consensus adapter for miner")
-		
-		// Configure miner
-		numThreads := runtime.NumCPU() - 1
-		if numThreads < 1 {
-			numThreads = 1
-		}
-		
-		minerConfig := &miner.MinerConfig{
-			MinerAddress:    config.MinerAddr,
-			NumThreads:      numThreads,
-			CoinbaseMessage: []byte(fmt.Sprintf("Dinari Blockchain - Mined by %s", config.MinerAddr[:8])),
-			CPUPriority:     80, // Use 80% CPU
-		}
-		
-		logger.Info("Miner configuration",
+		logger.Info("🚀 Starting miner",
 			zap.String("miner_address", config.MinerAddr),
 			zap.Int("threads", numThreads),
-			zap.Int("cpu_priority", minerConfig.CPUPriority),
+			zap.String("enforcement", "STRICT 15-second block intervals"),
 		)
 		
-		// Create miner instance
-		minerInst, err := miner.NewMiner(
-			minerConfig,
-			blockchainAdapter,
-			mempoolAdapter,
-			consensusAdapter,
+		// Create miner instance with correct arguments
+		// NewMiner(blockchain BlockchainInterface, mempool MempoolInterface, pow POWInterface, minerAddr string)
+		minerInst := miner.NewMiner(
+			blockchain,      // Implements BlockchainInterface
+			mempoolAdapter,  // Implements MempoolInterface  
+			consensusEngine, // Implements POWInterface
+			config.MinerAddr,
 		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to initialize miner: %w", err)
-		}
 		
 		node.minerService = minerInst
-		logger.Info("✅ Miner initialized successfully")
+		logger.Info("✅ PRODUCTION miner initialized with block interval enforcement")
 	} else {
 		logger.Info("Mining disabled")
 	}
