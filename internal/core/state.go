@@ -81,26 +81,32 @@ func (a *AccountState) Copy() *AccountState {
 	}
 }
 
-// StateDB manages the blockchain state with atomic operations
+// ============================================
+// REFACTORED StateDB - SINGLE LOCK DESIGN
+// ============================================
+// KEY CHANGES FROM ORIGINAL:
+// 1. Removed cacheMu, dirtyMu, checkpointMu
+// 2. Only stateMu remains - protects EVERYTHING
+// 3. All internal methods have "Unsafe" suffix
+// 4. No nested lock acquisition possible
+// ============================================
+
 type StateDB struct {
 	db *badger.DB
 	
-	// In-memory cache for performance
-	cache map[string]*AccountState
-	cacheMu sync.RWMutex
-	
-	// Dirty accounts (modified but not committed)
-	dirty map[string]*AccountState
-	dirtyMu sync.RWMutex
-	
-	// Checkpoint system for rollbacks
-	checkpoints []map[string]*AccountState
-	checkpointMu sync.Mutex
-	
-	// Global state lock for atomic operations
+	// ===== SINGLE MUTEX - Protects all fields below =====
 	stateMu sync.RWMutex
 	
-	// Merkle tree for state verification
+	// In-memory cache for performance (protected by stateMu)
+	cache map[string]*AccountState
+	
+	// Dirty accounts (modified but not committed) (protected by stateMu)
+	dirty map[string]*AccountState
+	
+	// Checkpoint system for rollbacks (protected by stateMu)
+	checkpoints []map[string]*AccountState
+	
+	// Merkle tree for state verification (has its own internal lock)
 	merkleTree *StateMerkleTree
 }
 
@@ -131,47 +137,24 @@ func NewStateDB(db *badger.DB) (*StateDB, error) {
 	return state, nil
 }
 
+// ============================================
+// PUBLIC API - These methods LOCK stateMu
+// ============================================
+
 // GetAccount retrieves an account's state (thread-safe)
 func (s *StateDB) GetAccount(address string) (*AccountState, error) {
 	s.stateMu.RLock()
 	defer s.stateMu.RUnlock()
 	
-	// Check dirty accounts first
-	s.dirtyMu.RLock()
-	if acc, exists := s.dirty[address]; exists {
-		s.dirtyMu.RUnlock()
-		return acc.Copy(), nil
-	}
-	s.dirtyMu.RUnlock()
-	
-	// Check cache
-	s.cacheMu.RLock()
-	if acc, exists := s.cache[address]; exists {
-		s.cacheMu.RUnlock()
-		return acc.Copy(), nil
-	}
-	s.cacheMu.RUnlock()
-	
-	// Load from database
-	acc, err := s.loadAccount(address)
-	if err != nil {
-		if err == badger.ErrKeyNotFound {
-			return nil, ErrAccountNotFound
-		}
-		return nil, fmt.Errorf("failed to load account: %w", err)
-	}
-	
-	// Add to cache
-	s.cacheMu.Lock()
-	s.cache[address] = acc.Copy()
-	s.cacheMu.Unlock()
-	
-	return acc.Copy(), nil
+	return s.getAccountUnsafe(address)
 }
 
 // GetBalance retrieves an account's balance for a specific token
 func (s *StateDB) GetBalance(address string, tokenType TokenType) (*big.Int, error) {
-	acc, err := s.GetAccount(address)
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	
+	acc, err := s.getAccountUnsafe(address)
 	if err != nil {
 		if err == ErrAccountNotFound {
 			return big.NewInt(0), nil
@@ -191,7 +174,10 @@ func (s *StateDB) GetBalance(address string, tokenType TokenType) (*big.Int, err
 
 // GetNonce retrieves an account's nonce
 func (s *StateDB) GetNonce(address string) (uint64, error) {
-	acc, err := s.GetAccount(address)
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	
+	acc, err := s.getAccountUnsafe(address)
 	if err != nil {
 		if err == ErrAccountNotFound {
 			return 0, nil
@@ -210,7 +196,7 @@ func (s *StateDB) AddBalance(address string, amount *big.Int, tokenType TokenTyp
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 	
-	return s.modifyBalance(address, amount, tokenType, true)
+	return s.modifyBalanceUnsafe(address, amount, tokenType, true)
 }
 
 // SubBalance subtracts from an account's balance
@@ -222,7 +208,7 @@ func (s *StateDB) SubBalance(address string, amount *big.Int, tokenType TokenTyp
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 	
-	return s.modifyBalance(address, amount, tokenType, false)
+	return s.modifyBalanceUnsafe(address, amount, tokenType, false)
 }
 
 // SetNonce sets an account's nonce
@@ -230,13 +216,13 @@ func (s *StateDB) SetNonce(address string, nonce uint64) error {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 	
-	acc, err := s.getOrCreateAccount(address)
+	acc, err := s.getOrCreateAccountUnsafe(address)
 	if err != nil {
 		return err
 	}
 	
 	acc.Nonce = nonce
-	s.markDirty(address, acc)
+	s.markDirtyUnsafe(address, acc)
 	
 	return nil
 }
@@ -254,12 +240,12 @@ func (s *StateDB) Transfer(from, to string, amount *big.Int, tokenType TokenType
 	defer s.stateMu.Unlock()
 	
 	// Check sender balance
-	if err := s.modifyBalance(from, amount, tokenType, false); err != nil {
+	if err := s.modifyBalanceUnsafe(from, amount, tokenType, false); err != nil {
 		return fmt.Errorf("failed to deduct from sender: %w", err)
 	}
 	
 	// Add to recipient
-	if err := s.modifyBalance(to, amount, tokenType, true); err != nil {
+	if err := s.modifyBalanceUnsafe(to, amount, tokenType, true); err != nil {
 		// This should never fail, but if it does, we need to panic
 		// because state is now inconsistent
 		panic(fmt.Sprintf("CRITICAL: failed to add to recipient after deducting from sender: %v", err))
@@ -270,55 +256,26 @@ func (s *StateDB) Transfer(from, to string, amount *big.Int, tokenType TokenType
 
 // Checkpoint creates a state checkpoint for rollback
 func (s *StateDB) Checkpoint() int {
-	s.checkpointMu.Lock()
-	defer s.checkpointMu.Unlock()
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
 	
-	// Create snapshot of dirty state
-	snapshot := make(map[string]*AccountState)
-	
-	s.dirtyMu.RLock()
-	for addr, acc := range s.dirty {
-		snapshot[addr] = acc.Copy()
-	}
-	s.dirtyMu.RUnlock()
-	
-	s.checkpoints = append(s.checkpoints, snapshot)
-	return len(s.checkpoints) - 1
+	return s.checkpointUnsafe()
 }
 
 // RevertToCheckpoint reverts state to a checkpoint
 func (s *StateDB) RevertToCheckpoint(checkpointID int) error {
-	s.checkpointMu.Lock()
-	defer s.checkpointMu.Unlock()
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
 	
-	if checkpointID < 0 || checkpointID >= len(s.checkpoints) {
-		return ErrCheckpointNotFound
-	}
-	
-	// Restore snapshot
-	snapshot := s.checkpoints[checkpointID]
-	
-	s.dirtyMu.Lock()
-	s.dirty = make(map[string]*AccountState)
-	for addr, acc := range snapshot {
-		s.dirty[addr] = acc.Copy()
-	}
-	s.dirtyMu.Unlock()
-	
-	// Remove checkpoints after this one
-	s.checkpoints = s.checkpoints[:checkpointID]
-	
-	return nil
+	return s.revertToCheckpointUnsafe(checkpointID)
 }
 
 // DiscardCheckpoint removes a checkpoint
 func (s *StateDB) DiscardCheckpoint(checkpointID int) {
-	s.checkpointMu.Lock()
-	defer s.checkpointMu.Unlock()
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
 	
-	if checkpointID >= 0 && checkpointID < len(s.checkpoints) {
-		s.checkpoints = s.checkpoints[:checkpointID]
-	}
+	s.discardCheckpointUnsafe(checkpointID)
 }
 
 // Commit atomically commits all dirty state to database
@@ -326,65 +283,7 @@ func (s *StateDB) Commit() error {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 	
-	s.dirtyMu.Lock()
-	defer s.dirtyMu.Unlock()
-	
-	if len(s.dirty) == 0 {
-		return nil // Nothing to commit
-	}
-	
-	// Use BadgerDB transaction for atomicity
-	err := s.db.Update(func(txn *badger.Txn) error {
-		for address, acc := range s.dirty {
-			// Validate account before committing
-			if err := s.validateAccount(acc); err != nil {
-				return fmt.Errorf("invalid account state for %s: %w", address, err)
-			}
-			
-			// Serialize account
-			data, err := json.Marshal(acc)
-			if err != nil {
-				return fmt.Errorf("failed to marshal account: %w", err)
-			}
-			
-			// Write to database
-			key := append(prefixAccount, []byte(address)...)
-			if err := txn.Set(key, data); err != nil {
-				return fmt.Errorf("failed to write account: %w", err)
-			}
-			
-			// Update merkle tree
-			s.merkleTree.Update(address, acc)
-		}
-		
-		// Save merkle root
-		root := s.merkleTree.Root()
-		if err := txn.Set(keyLatestState, root); err != nil {
-			return fmt.Errorf("failed to save state root: %w", err)
-		}
-		
-		return nil
-	})
-	
-	if err != nil {
-		return fmt.Errorf("commit failed: %w", err)
-	}
-	
-	// Update cache and clear dirty
-	s.cacheMu.Lock()
-	for address, acc := range s.dirty {
-		s.cache[address] = acc.Copy()
-	}
-	s.cacheMu.Unlock()
-	
-	s.dirty = make(map[string]*AccountState)
-	
-	// Clear checkpoints after successful commit
-	s.checkpointMu.Lock()
-	s.checkpoints = make([]map[string]*AccountState, 0)
-	s.checkpointMu.Unlock()
-	
-	return nil
+	return s.commitUnsafe()
 }
 
 // GetStateRoot returns the current merkle root of the state
@@ -419,7 +318,7 @@ func (s *StateDB) ValidateState() error {
 				}
 				
 				// Validate account
-				if err := s.validateAccount(&acc); err != nil {
+				if err := s.validateAccountUnsafe(&acc); err != nil {
 					return err
 				}
 				
@@ -449,41 +348,48 @@ func (s *StateDB) ValidateState() error {
 	return nil
 }
 
-// Internal helper methods
+// ============================================
+// INTERNAL METHODS - "Unsafe" suffix means:
+// "Caller MUST hold stateMu lock"
+// These methods do NOT lock
+// ============================================
 
-func (s *StateDB) loadAccount(address string) (*AccountState, error) {
-	var acc AccountState
-	
-	err := s.db.View(func(txn *badger.Txn) error {
-		key := append(prefixAccount, []byte(address)...)
-		item, err := txn.Get(key)
-		if err != nil {
-			return err
-		}
-		
-		return item.Value(func(val []byte) error {
-			return json.Unmarshal(val, &acc)
-		})
-	})
-	
-	if err != nil {
-		return nil, err
+// getAccountUnsafe retrieves account without locking
+func (s *StateDB) getAccountUnsafe(address string) (*AccountState, error) {
+	// Check dirty accounts first
+	if acc, exists := s.dirty[address]; exists {
+		return acc.Copy(), nil
 	}
 	
-	return &acc, nil
+	// Check cache
+	if acc, exists := s.cache[address]; exists {
+		return acc.Copy(), nil
+	}
+	
+	// Load from database
+	acc, err := s.loadAccountFromDB(address)
+	if err != nil {
+		if err == badger.ErrKeyNotFound {
+			return nil, ErrAccountNotFound
+		}
+		return nil, fmt.Errorf("failed to load account: %w", err)
+	}
+	
+	// Add to cache
+	s.cache[address] = acc.Copy()
+	
+	return acc.Copy(), nil
 }
 
-func (s *StateDB) getOrCreateAccount(address string) (*AccountState, error) {
+// getOrCreateAccountUnsafe gets or creates account without locking
+func (s *StateDB) getOrCreateAccountUnsafe(address string) (*AccountState, error) {
 	// Check dirty first
-	s.dirtyMu.RLock()
 	if acc, exists := s.dirty[address]; exists {
-		s.dirtyMu.RUnlock()
 		return acc, nil
 	}
-	s.dirtyMu.RUnlock()
 	
 	// Try to load existing
-	acc, err := s.GetAccount(address)
+	acc, err := s.getAccountUnsafe(address)
 	if err == nil {
 		return acc, nil
 	}
@@ -494,13 +400,14 @@ func (s *StateDB) getOrCreateAccount(address string) (*AccountState, error) {
 	
 	// Create new account
 	acc = NewAccountState(address)
-	s.markDirty(address, acc)
+	s.markDirtyUnsafe(address, acc)
 	
 	return acc, nil
 }
 
-func (s *StateDB) modifyBalance(address string, amount *big.Int, tokenType TokenType, add bool) error {
-	acc, err := s.getOrCreateAccount(address)
+// modifyBalanceUnsafe modifies balance without locking
+func (s *StateDB) modifyBalanceUnsafe(address string, amount *big.Int, tokenType TokenType, add bool) error {
+	acc, err := s.getOrCreateAccountUnsafe(address)
 	if err != nil {
 		return err
 	}
@@ -525,17 +432,112 @@ func (s *StateDB) modifyBalance(address string, amount *big.Int, tokenType Token
 		balance.Sub(balance, amount)
 	}
 	
-	s.markDirty(address, acc)
+	s.markDirtyUnsafe(address, acc)
 	return nil
 }
 
-func (s *StateDB) markDirty(address string, acc *AccountState) {
-	s.dirtyMu.Lock()
+// markDirtyUnsafe marks account as dirty without locking
+func (s *StateDB) markDirtyUnsafe(address string, acc *AccountState) {
 	s.dirty[address] = acc.Copy()
-	s.dirtyMu.Unlock()
 }
 
-func (s *StateDB) validateAccount(acc *AccountState) error {
+// checkpointUnsafe creates checkpoint without locking
+func (s *StateDB) checkpointUnsafe() int {
+	// Create snapshot of dirty state
+	snapshot := make(map[string]*AccountState)
+	for addr, acc := range s.dirty {
+		snapshot[addr] = acc.Copy()
+	}
+	
+	s.checkpoints = append(s.checkpoints, snapshot)
+	return len(s.checkpoints) - 1
+}
+
+// revertToCheckpointUnsafe reverts to checkpoint without locking
+func (s *StateDB) revertToCheckpointUnsafe(checkpointID int) error {
+	if checkpointID < 0 || checkpointID >= len(s.checkpoints) {
+		return ErrCheckpointNotFound
+	}
+	
+	// Restore snapshot
+	snapshot := s.checkpoints[checkpointID]
+	
+	s.dirty = make(map[string]*AccountState)
+	for addr, acc := range snapshot {
+		s.dirty[addr] = acc.Copy()
+	}
+	
+	// Remove checkpoints after this one
+	s.checkpoints = s.checkpoints[:checkpointID]
+	
+	return nil
+}
+
+// discardCheckpointUnsafe removes checkpoint without locking
+func (s *StateDB) discardCheckpointUnsafe(checkpointID int) {
+	if checkpointID >= 0 && checkpointID < len(s.checkpoints) {
+		s.checkpoints = s.checkpoints[:checkpointID]
+	}
+}
+
+// commitUnsafe commits changes without locking
+func (s *StateDB) commitUnsafe() error {
+	if len(s.dirty) == 0 {
+		return nil // Nothing to commit
+	}
+	
+	// Use BadgerDB transaction for atomicity
+	err := s.db.Update(func(txn *badger.Txn) error {
+		for address, acc := range s.dirty {
+			// Validate account before committing
+			if err := s.validateAccountUnsafe(acc); err != nil {
+				return fmt.Errorf("invalid account state for %s: %w", address, err)
+			}
+			
+			// Serialize account
+			data, err := json.Marshal(acc)
+			if err != nil {
+				return fmt.Errorf("failed to marshal account: %w", err)
+			}
+			
+			// Write to database
+			key := append(prefixAccount, []byte(address)...)
+			if err := txn.Set(key, data); err != nil {
+				return fmt.Errorf("failed to write account: %w", err)
+			}
+			
+			// Update merkle tree
+			s.merkleTree.Update(address, acc)
+		}
+		
+		// Save merkle root
+		root := s.merkleTree.Root()
+		if err := txn.Set(keyLatestState, root); err != nil {
+			return fmt.Errorf("failed to save state root: %w", err)
+		}
+		
+		return nil
+	})
+	
+	if err != nil {
+		return fmt.Errorf("commit failed: %w", err)
+	}
+	
+	// Update cache and clear dirty
+	for address, acc := range s.dirty {
+		s.cache[address] = acc.Copy()
+	}
+	
+	s.dirty = make(map[string]*AccountState)
+	
+	// Clear checkpoints after successful commit
+	s.checkpoints = make([]map[string]*AccountState, 0)
+	
+	return nil
+}
+
+// validateAccountUnsafe validates account without locking
+func (s *StateDB) validateAccountUnsafe(acc *AccountState) error {
 	if acc.Address == "" {
 		return errors.New("empty address")
 	}
@@ -546,6 +548,33 @@ func (s *StateDB) validateAccount(acc *AccountState) error {
 		return ErrNegativeBalance
 	}
 	return nil
+}
+
+// ============================================
+// DATABASE OPERATIONS (no state locking needed)
+// ============================================
+
+// loadAccountFromDB loads account directly from database
+func (s *StateDB) loadAccountFromDB(address string) (*AccountState, error) {
+	var acc AccountState
+	
+	err := s.db.View(func(txn *badger.Txn) error {
+		key := append(prefixAccount, []byte(address)...)
+		item, err := txn.Get(key)
+		if err != nil {
+			return err
+		}
+		
+		return item.Value(func(val []byte) error {
+			return json.Unmarshal(val, &acc)
+		})
+	})
+	
+	if err != nil {
+		return nil, err
+	}
+	
+	return &acc, nil
 }
 
 func (s *StateDB) verifyVersion() error {
@@ -620,7 +649,10 @@ func (s *StateDB) rebuildMerkleTree() error {
 	})
 }
 
-// StateMerkleTree provides merkle tree for state verification
+// ============================================
+// MERKLE TREE (has its own internal lock)
+// ============================================
+
 type StateMerkleTree struct {
 	nodes map[string][]byte
 	mu    sync.RWMutex
