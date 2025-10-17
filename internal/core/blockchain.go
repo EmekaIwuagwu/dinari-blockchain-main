@@ -565,27 +565,39 @@ func (bc *Blockchain) ValidateBlockComprehensive(block *Block) error {
 		return fmt.Errorf("basic validation failed: %w", err)
 	}
 	
-	// 2. Get previous block
-	prevBlock, err := bc.GetBlockByHash(block.Header.PrevBlockHash)
-	if err != nil {
-		if block.Header.Height == 0 {
-			// Genesis block - skip previous block checks
-			return nil
-		}
-		return fmt.Errorf("previous block not found: %w", err)
+	// 2. Genesis block - skip previous block checks
+	if block.Header.Height == 0 {
+		return nil
 	}
 	
-	// 3. Header validation (includes strict timestamp check)
+	// 3. Get previous block
+	var prevBlock *Block
+	var err error
+	
+	// Special handling for block 1 (genesis has empty PrevBlockHash)
+	if block.Header.Height == 1 {
+		prevBlock, err = bc.GetBlockByHeight(0)
+		if err != nil {
+			return fmt.Errorf("genesis block not found: %w", err)
+		}
+	} else {
+		prevBlock, err = bc.GetBlockByHash(block.Header.PrevBlockHash)
+		if err != nil {
+			return fmt.Errorf("previous block not found: %w", err)
+		}
+	}
+	
+	// 4. Header validation (includes strict timestamp check)
 	if err := bc.validateBlockHeader(block.Header, prevBlock.Header); err != nil {
 		return fmt.Errorf("header validation failed: %w", err)
 	}
 	
-	// 4. Transaction validation
+	// 5. Transaction validation
 	if err := bc.validateBlockTransactions(block); err != nil {
 		return fmt.Errorf("transaction validation failed: %w", err)
 	}
 	
-	// 5. Merkle root validation
+	// 6. Merkle root validation
 	if err := bc.validateMerkleRoot(block); err != nil {
 		return fmt.Errorf("merkle root validation failed: %w", err)
 	}
