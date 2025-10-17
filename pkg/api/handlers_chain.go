@@ -4,7 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"strconv"
-	"strings"  // ADD THIS - it's missing!
+	"strings"
 	
 	"github.com/EmekaIwuagwu/dinari-blockchain/internal/core"
 )
@@ -12,8 +12,8 @@ import (
 // handleChainGetBlock returns a block by height or hash
 func (s *Server) handleChainGetBlock(params json.RawMessage) (interface{}, *RPCError) {
 	var req struct {
-		BlockHeight *uint64 `json:"blockHeight"` // Changed from "height"
-		Height      *uint64 `json:"height"`      // Also support "height" for backward compatibility
+		BlockHeight *uint64 `json:"blockHeight"`
+		Height      *uint64 `json:"height"`
 		BlockHash   string  `json:"blockHash"`
 	}
 
@@ -78,6 +78,13 @@ func formatBlock(block *core.Block) map[string]interface{} {
 		}
 	}
 
+	// Get miner address - use empty string if not available
+	minerAddr := ""
+	if len(block.Transactions) > 0 {
+		// Typically the first transaction is the coinbase/reward transaction
+		minerAddr = block.Transactions[0].To
+	}
+
 	return map[string]interface{}{
 		"hash":         "0x" + hex.EncodeToString(block.Header.Hash),
 		"height":       block.Header.Height,
@@ -87,7 +94,7 @@ func formatBlock(block *core.Block) map[string]interface{} {
 		"prevHash":     "0x" + hex.EncodeToString(block.Header.PrevBlockHash),
 		"merkleRoot":   "0x" + hex.EncodeToString(block.Header.MerkleRoot),
 		"stateRoot":    "0x" + hex.EncodeToString(block.Header.StateRoot),
-		"miner":        block.Header.Miner,
+		"miner":        minerAddr,  // FIXED: Use derived miner address
 		"transactions": txs,
 		"txCount":      len(block.Transactions),
 	}
@@ -95,25 +102,34 @@ func formatBlock(block *core.Block) map[string]interface{} {
 
 // handleChainGetHeight returns the current blockchain height
 func (s *Server) handleChainGetHeight(params json.RawMessage) (interface{}, *RPCError) {
-	latestBlock := s.blockchain.GetLatestBlock()
-	if latestBlock == nil {
-		return nil, &RPCError{Code: -32603, Message: "failed to get latest block"}
-	}
+	// Get current height directly
+	height := s.blockchain.GetHeight()
 
-	// Return ONLY the height as a number, not the full block
+	// Return ONLY the height as a number
 	return map[string]interface{}{
-		"height": latestBlock.Header.Height,
+		"height": height,
 	}, nil
 }
 
-// handleChainGetTip returns the current chain tip
-func (s *Server) handleChainGetTip(params json.RawMessage) (interface{}, *RPCError) {
-	tip := s.blockchain.GetHeight()
+// handleChainGetStats returns blockchain statistics
+func (s *Server) handleChainGetStats(params json.RawMessage) (interface{}, *RPCError) {
 	height := s.blockchain.GetHeight()
+	
+	// Get the latest block to show more stats
+	latestBlock, err := s.blockchain.GetBlockByHeight(height)
+	if err != nil || latestBlock == nil {
+		return map[string]interface{}{
+			"height":     height,
+			"difficulty": 0,
+			"timestamp":  0,
+		}, nil
+	}
 
 	return map[string]interface{}{
-		"hash":   "0x" + strconv.FormatUint(tip, 16),
-		"height": height,
+		"height":     height,
+		"difficulty": latestBlock.Header.Difficulty,
+		"hash":       "0x" + hex.EncodeToString(latestBlock.Header.Hash),
+		"timestamp":  latestBlock.Header.Timestamp,
 	}, nil
 }
 
