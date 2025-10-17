@@ -211,6 +211,24 @@ func (s *Server) HandleTxGetPending(ctx context.Context, params json.RawMessage)
 	return result, nil
 }
 
+// ADD THESE TWO NEW HANDLER METHODS after HandleTxGetPending:
+
+func (s *Server) HandleTxGetByAddress(ctx context.Context, params json.RawMessage) (interface{}, error) {
+	result, rpcErr := s.handleTxGetByAddress(params)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	return result, nil
+}
+
+func (s *Server) HandleTxGetStats(ctx context.Context, params json.RawMessage) (interface{}, error) {
+	result, rpcErr := s.handleTxGetStats(params)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	return result, nil
+}
+
 func (s *Server) HandleWalletCreate(ctx context.Context, params json.RawMessage) (interface{}, error) {
 	result, rpcErr := s.handleWalletCreate(params)
 	if rpcErr != nil {

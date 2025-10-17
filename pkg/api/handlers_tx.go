@@ -5,10 +5,29 @@ import (
 	"encoding/json"
 	"math/big"
 	"time"
+	"sort"
 
 	"github.com/EmekaIwuagwu/dinari-blockchain/internal/types"
 	"github.com/EmekaIwuagwu/dinari-blockchain/pkg/crypto"
 )
+
+// sortTransactionsByTimestamp sorts transactions by timestamp (newest first)
+func sortTransactionsByTimestamp(txs []interface{}) {
+	sort.Slice(txs, func(i, j int) bool {
+		// Extract timestamps from the transaction interfaces
+		txI := txs[i].(map[string]interface{})
+		txJ := txs[j].(map[string]interface{})
+		
+		timeI, okI := txI["timestamp"].(int64)
+		timeJ, okJ := txJ["timestamp"].(int64)
+		
+		if !okI || !okJ {
+			return false
+		}
+		
+		return timeI > timeJ // Descending order (newest first)
+	})
+}
 
 // handleTxSend sends a new transaction
 func (s *Server) handleTxSend(params json.RawMessage) (interface{}, *RPCError) {
@@ -142,29 +161,42 @@ func (s *Server) handleTxGetByAddress(params json.RawMessage) (interface{}, *RPC
 		return nil, &RPCError{Code: -32602, Message: "invalid params"}
 	}
 
+	// Validate address
+	if req.Address == "" {
+		return nil, &RPCError{Code: -32602, Message: "address is required"}
+	}
+
 	if req.Limit <= 0 || req.Limit > 100 {
 		req.Limit = 20
 	}
 
+	// Get transactions for the address
 	txs := s.mempool.GetTransactionsByAddress(req.Address)
 	
+	// Format all transactions first
+	formattedTxs := make([]interface{}, len(txs))
+	for i := 0; i < len(txs); i++ {
+		formattedTxs[i] = formatMempoolTransaction(txs[i])
+	}
+	
+	// CRITICAL: Sort formatted transactions by timestamp (newest first)
+	sortTransactionsByTimestamp(formattedTxs)
+	
 	limit := req.Limit
-	if len(txs) < limit {
-		limit = len(txs)
+	if len(formattedTxs) < limit {
+		limit = len(formattedTxs)
 	}
 
-	result := make([]interface{}, limit)
-	for i := 0; i < limit; i++ {
-		result[i] = formatMempoolTransaction(txs[i])
-	}
+	// Return only the requested limit
+	result := formattedTxs[:limit]
 
 	return map[string]interface{}{
 		"transactions": result,
-		"total":        len(txs),
+		"total":        len(formattedTxs),
 		"returned":     limit,
+		"address":      req.Address,
 	}, nil
 }
-
 // handleTxGetStats returns mempool statistics
 func (s *Server) handleTxGetStats(params json.RawMessage) (interface{}, *RPCError) {
 	stats := s.mempool.GetStats()

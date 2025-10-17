@@ -528,6 +528,7 @@ func initializeNode(ctx context.Context, logger *zap.Logger, config *Config) (*N
 	rpcServer.SetMempool(mempoolInst)
 
 	// Register all RPC handlers
+// Register all RPC handlers
 	logger.Info("Registering RPC handlers")
 	rpcServer.RegisterMethod("chain_getHeight", rpcServer.HandleChainGetHeight)
 	rpcServer.RegisterMethod("chain_getBlock", rpcServer.HandleChainGetBlock)
@@ -536,6 +537,10 @@ func initializeNode(ctx context.Context, logger *zap.Logger, config *Config) (*N
 	rpcServer.RegisterMethod("tx_send", rpcServer.HandleTxSend)
 	rpcServer.RegisterMethod("tx_get", rpcServer.HandleTxGet)
 	rpcServer.RegisterMethod("tx_getPending", rpcServer.HandleTxGetPending)
+	// NEW: Transaction history methods for wallet and explorer integration
+	rpcServer.RegisterMethod("tx_listByWallet", rpcServer.HandleTxGetByAddress)  // Primary method for wallet
+	rpcServer.RegisterMethod("tx_getByAddress", rpcServer.HandleTxGetByAddress) // Alias for compatibility
+	rpcServer.RegisterMethod("tx_getStats", rpcServer.HandleTxGetStats)          // Mempool statistics
 
 	rpcServer.RegisterMethod("wallet_create", rpcServer.HandleWalletCreate)
 	rpcServer.RegisterMethod("wallet_balance", rpcServer.HandleWalletBalance)
