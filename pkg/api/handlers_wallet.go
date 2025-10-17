@@ -36,6 +36,7 @@ func (s *Server) handleWalletCreate(params json.RawMessage) (interface{}, *RPCEr
 
 
 // handleWalletBalance returns the balance for an address
+// handleWalletBalance returns the balance for an address
 func (s *Server) handleWalletBalance(params json.RawMessage) (interface{}, *RPCError) {
 	var req struct {
 		Address string `json:"address"`
@@ -53,13 +54,19 @@ func (s *Server) handleWalletBalance(params json.RawMessage) (interface{}, *RPCE
 		return nil, &RPCError{Code: -32602, Message: "invalid D-address format"}
 	}
 
-	// Get account
+	// Get account - handle case where account doesn't exist yet
 	account, err := s.blockchain.State.GetAccount(req.Address)
 	if err != nil {
-		s.logger.Error("Failed to get account",
-			zap.String("address", req.Address),
-			zap.Error(err))
-		return nil, &RPCError{Code: -32000, Message: "failed to get account"}
+		// If account doesn't exist, return zero balance instead of error
+		s.logger.Info("📭 Account not found, returning zero balance",
+			zap.String("address", req.Address))
+		
+		return map[string]interface{}{
+			"address":    req.Address,
+			"balanceDNT": "0",
+			"balanceAFC": "0",
+			"nonce":      0,
+		}, nil
 	}
 
 	// Log balance query
