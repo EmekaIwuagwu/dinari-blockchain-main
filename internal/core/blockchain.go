@@ -881,12 +881,51 @@ func (bc *Blockchain) calculateBlockSize(block *Block) int {
 }
 
 func (bc *Blockchain) applyTransaction(tx *types.Transaction) error {
-	// TEMPORARY: Skip state updates to avoid deadlock
-	// Just log that we would have applied it
+	// Handle coinbase/mining reward transactions
 	if tx.From == "COINBASE" || tx.From == "coinbase" {
-		fmt.Printf("💰 Would credit %s DNT to %s (state updates disabled)\n", 
-			tx.Amount.String(), tx.To)
+		// Add reward directly without locks
+		tokenType := TokenDNT
+		if tx.TokenType == "AFC" {
+			tokenType = TokenAFC
+		}
+		
+		// Use AddBalance which handles locking internally
+		if err := bc.State.AddBalance(tx.To, tx.Amount, tokenType); err != nil {
+			// Don't fail the block if state update fails - just log it
+			fmt.Printf("⚠️  Warning: Failed to update state for coinbase: %v\n", err)
+			return nil // Return nil to avoid blocking the chain
+		}
+		
+		return nil
 	}
+	
+	// Handle regular transactions
+	tokenType := TokenDNT
+	if tx.TokenType == "AFC" {
+		tokenType = TokenAFC
+	}
+	
+	// Deduct from sender
+	if err := bc.State.SubBalance(tx.From, tx.Amount, tokenType); err != nil {
+		return fmt.Errorf("insufficient balance: %w", err)
+	}
+	
+	// Deduct fee
+	if tx.FeeDNT != nil && tx.FeeDNT.Sign() > 0 {
+		if err := bc.State.SubBalance(tx.From, tx.FeeDNT, TokenDNT); err != nil {
+			return fmt.Errorf("insufficient balance for fee: %w", err)
+		}
+	}
+	
+	// Add to recipient
+	if err := bc.State.AddBalance(tx.To, tx.Amount, tokenType); err != nil {
+		return fmt.Errorf("failed to credit recipient: %w", err)
+	}
+	
+	// Increment nonce
+	currentNonce, _ := bc.State.GetNonce(tx.From)
+	bc.State.SetNonce(tx.From, currentNonce+1)
+	
 	return nil
 }
 
