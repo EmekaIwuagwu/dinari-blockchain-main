@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/hex"
 	"encoding/json"
-	"strconv"
 	"strings"
 	
 	"github.com/EmekaIwuagwu/dinari-blockchain/internal/core"
@@ -108,28 +107,6 @@ func (s *Server) handleChainGetHeight(params json.RawMessage) (interface{}, *RPC
 	// Return ONLY the height as a number
 	return map[string]interface{}{
 		"height": height,
-	}, nil
-}
-
-// handleChainGetStats returns blockchain statistics
-func (s *Server) handleChainGetStats(params json.RawMessage) (interface{}, *RPCError) {
-	height := s.blockchain.GetHeight()
-	
-	// Get the latest block to show more stats
-	latestBlock, err := s.blockchain.GetBlockByHeight(height)
-	if err != nil || latestBlock == nil {
-		return map[string]interface{}{
-			"height":     height,
-			"difficulty": 0,
-			"timestamp":  0,
-		}, nil
-	}
-
-	return map[string]interface{}{
-		"height":     height,
-		"difficulty": latestBlock.Header.Difficulty,
-		"hash":       "0x" + hex.EncodeToString(latestBlock.Header.Hash),
-		"timestamp":  latestBlock.Header.Timestamp,
 	}, nil
 }
 
