@@ -4,98 +4,105 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"strconv"
+	"strings"  // ADD THIS - it's missing!
 	
 	"github.com/EmekaIwuagwu/dinari-blockchain/internal/core"
 )
 
-// handleChainGetBlock retrieves a block by hash or height
+// handleChainGetBlock returns a block by height or hash
 func (s *Server) handleChainGetBlock(params json.RawMessage) (interface{}, *RPCError) {
 	var req struct {
-		BlockHash   string `json:"blockHash,omitempty"`
-		BlockHeight *uint64 `json:"blockHeight,omitempty"`
+		BlockHeight *uint64 `json:"blockHeight"` // Changed from "height"
+		Height      *uint64 `json:"height"`      // Also support "height" for backward compatibility
+		BlockHash   string  `json:"blockHash"`
 	}
 
 	if err := json.Unmarshal(params, &req); err != nil {
 		return nil, &RPCError{Code: -32602, Message: "invalid params"}
 	}
 
+	// Support both "height" and "blockHeight" parameters
+	var height *uint64
+	if req.BlockHeight != nil {
+		height = req.BlockHeight
+	} else if req.Height != nil {
+		height = req.Height
+	}
+
+	// Must provide either height or hash
+	if height == nil && req.BlockHash == "" {
+		return nil, &RPCError{Code: -32602, Message: "must provide blockHash or blockHeight"}
+	}
+
 	var block *core.Block
 	var err error
 
-	// Get by hash if provided
 	if req.BlockHash != "" {
-		hashStr := req.BlockHash
-		if len(hashStr) > 2 && hashStr[:2] == "0x" {
-			hashStr = hashStr[2:]
-		}
-
-		hashBytes, err := hex.DecodeString(hashStr)
-		if err != nil || len(hashBytes) != 32 {
+		// Get by hash
+		hashBytes, decodeErr := hex.DecodeString(strings.TrimPrefix(req.BlockHash, "0x"))
+		if decodeErr != nil {
 			return nil, &RPCError{Code: -32602, Message: "invalid block hash"}
 		}
-
-		var hash [32]byte
-		copy(hash[:], hashBytes)
-
-		block, err = s.blockchain.GetBlockByHash(hash[:])
-	} else if req.BlockHeight != nil {
-		// Get by height
-		block, err = s.blockchain.GetBlockByHeight(*req.BlockHeight)
+		block, err = s.blockchain.GetBlockByHash(hashBytes)
 	} else {
-		return nil, &RPCError{Code: -32602, Message: "must provide blockHash or blockHeight"}
+		// Get by height
+		block, err = s.blockchain.GetBlockByHeight(*height)
 	}
 
 	if err != nil {
 		return nil, &RPCError{Code: -32004, Message: "block not found"}
 	}
 
-	// Calculate confirmations
-	currentHeight := s.blockchain.GetHeight()
-	confirmations := uint64(0)
-	if block.Header.Height <= currentHeight {
-		confirmations = currentHeight - block.Header.Height + 1
+	if block == nil {
+		return nil, &RPCError{Code: -32004, Message: "block not found"}
 	}
 
+	// Format the block response
+	return formatBlock(block), nil
+}
+
+// Helper function to format block data
+func formatBlock(block *core.Block) map[string]interface{} {
 	// Format transactions
-	txs := make([]interface{}, len(block.Transactions))
+	txs := make([]map[string]interface{}, len(block.Transactions))
 	for i, tx := range block.Transactions {
-		txs[i] = formatTransaction(tx)
+		txs[i] = map[string]interface{}{
+			"hash":      "0x" + hex.EncodeToString(tx.Hash[:]),
+			"from":      tx.From,
+			"to":        tx.To,
+			"amount":    tx.Amount.String(),
+			"tokenType": tx.TokenType,
+			"fee":       tx.FeeDNT.String(),
+			"nonce":     tx.Nonce,
+			"timestamp": tx.Timestamp,
+		}
 	}
 
 	return map[string]interface{}{
-		"header": map[string]interface{}{
-			"number":       block.Header.Height,
-			"parentHash":   "0x" + hex.EncodeToString(block.Header.PrevBlockHash[:]),
-			"timestamp":    block.Header.Timestamp,
-			"difficulty":   block.Header.Difficulty,
-			"nonce":        block.Header.Nonce,
-			"merkleRoot":   "0x" + hex.EncodeToString(block.Header.MerkleRoot[:]),
-			"stateRoot":    "0x" + hex.EncodeToString(block.Header.StateRoot[:]),
-			"miner":        "coinbase",
-			"txCount":      len(block.Transactions),
-		},
-		"hash":          "0x" + hex.EncodeToString(block.Header.Hash[:]),
-		"transactions":  txs,
-		"confirmations": confirmations,
-	}, nil
+		"hash":         "0x" + hex.EncodeToString(block.Header.Hash),
+		"height":       block.Header.Height,
+		"timestamp":    block.Header.Timestamp,
+		"difficulty":   block.Header.Difficulty,
+		"nonce":        block.Header.Nonce,
+		"prevHash":     "0x" + hex.EncodeToString(block.Header.PrevBlockHash),
+		"merkleRoot":   "0x" + hex.EncodeToString(block.Header.MerkleRoot),
+		"stateRoot":    "0x" + hex.EncodeToString(block.Header.StateRoot),
+		"miner":        block.Header.Miner,
+		"transactions": txs,
+		"txCount":      len(block.Transactions),
+	}
 }
 
 // handleChainGetHeight returns the current blockchain height
 func (s *Server) handleChainGetHeight(params json.RawMessage) (interface{}, *RPCError) {
-	height := s.blockchain.GetHeight()
-	tip := s.blockchain.GetHeight()
-
-	// Get current block
-	block, err := s.blockchain.GetBlockByHeight(height)
-	if err != nil {
-		return nil, &RPCError{Code: -32000, Message: "failed to get current block"}
+	latestBlock := s.blockchain.GetLatestBlock()
+	if latestBlock == nil {
+		return nil, &RPCError{Code: -32603, Message: "failed to get latest block"}
 	}
 
+	// Return ONLY the height as a number, not the full block
 	return map[string]interface{}{
-		"height":     height,
-		"hash":       "0x" + strconv.FormatUint(tip, 16),
-		"difficulty": block.Header.Difficulty,
-		"timestamp":  block.Header.Timestamp,
+		"height": latestBlock.Header.Height,
 	}, nil
 }
 
