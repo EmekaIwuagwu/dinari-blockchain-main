@@ -21,6 +21,8 @@ const (
 	DifficultyAdjustmentInterval = 120         // Adjust every 120 blocks
 	MaxBlockSize            = 1 << 20          // 1MB max block size
 	MaxTransactionsPerBlock = 5000             // Max 5000 txs per block
+
+	MinimumTransactionFee   = 10000 // 0.0001 DNT (10,000 satoshis)
 	
 	// Reorg protection
 	MaxReorgDepth = 100 // Maximum depth for chain reorganization
@@ -606,16 +608,36 @@ func (bc *Blockchain) ValidateBlockComprehensive(block *Block) error {
 }
 
 // addBlockToMainChain adds a block to the main chain and updates state
+// addBlockToMainChain adds a block to the main chain and updates state
 func (bc *Blockchain) addBlockToMainChain(block *Block) error {
 	// Create state checkpoint
 	checkpointID := bc.State.Checkpoint()
 	
+	// Track total fees collected in this block
+	totalFees := big.NewInt(0)
+	
 	// Apply transactions to state
 	for _, tx := range block.Transactions {
+		// Collect fees from non-coinbase transactions
+		if !tx.IsCoinbase() && tx.FeeDNT != nil && tx.FeeDNT.Sign() > 0 {
+			totalFees.Add(totalFees, tx.FeeDNT)
+		}
+		
 		if err := bc.applyTransaction(tx); err != nil {
 			// Rollback state on error
 			bc.State.RevertToCheckpoint(checkpointID)
 			return fmt.Errorf("failed to apply transaction: %w", err)
+		}
+	}
+	
+	// Give collected fees to miner (add to their balance)
+	// Fees are already deducted in applyTransaction, now give to miner
+	if totalFees.Sign() > 0 {
+		minerAddress := block.Transactions[0].To // Coinbase recipient is the miner
+		if err := bc.State.AddBalance(minerAddress, totalFees, TokenDNT); err != nil {
+			fmt.Printf("⚠️  Warning: Failed to credit fees to miner: %v\n", err)
+		} else {
+			fmt.Printf("💰 Miner earned %s satoshis in fees\n", totalFees.String())
 		}
 	}
 	
