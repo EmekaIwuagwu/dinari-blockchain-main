@@ -93,6 +93,8 @@ func (a *AccountState) Copy() *AccountState {
 
 type StateDB struct {
 	db *badger.DB
+
+	logger *zap.Logger
 	
 	// ===== SINGLE MUTEX - Protects all fields below =====
 	stateMu sync.RWMutex
@@ -108,6 +110,11 @@ type StateDB struct {
 	
 	// Merkle tree for state verification (has its own internal lock)
 	merkleTree *StateMerkleTree
+
+	commitMu         sync.Mutex              // Serializes commits
+	dirtyAccounts    map[string]bool         // Tracks dirty state
+	walPath          string                  // Path to WAL directory
+	walEnabled       bool                    // Enable WAL
 }
 
 // NewStateDB creates a new state database

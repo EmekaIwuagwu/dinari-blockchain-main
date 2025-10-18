@@ -43,7 +43,7 @@ var (
 // DB wraps BadgerDB with caching and optimization
 type DB struct {
 	db    *badger.DB
-	cache *LRUCache
+	cache *cache.Cache
 
 	logger *zap.Logger
 	path   string
@@ -56,7 +56,7 @@ type DB struct {
 	batchWg    sync.WaitGroup
 	
 	// Metrics
-	metrics *DBMetrics
+	metrics *Metrics
 	
 	// Lifecycle management
 	closed    bool
@@ -67,6 +67,9 @@ type DB struct {
 	gcTicker         *time.Ticker
 	compactionTicker *time.Ticker
 	metricsTicker    *time.Ticker
+
+	stopChan chan struct{}
+	wg       sync.WaitGroup
 }
 
 // DBConfig contains database configuration
@@ -164,6 +167,7 @@ func NewDB(config *DBConfig) (*DB, error) {
 		metrics:    &DBMetrics{},
 		batchQueue: make(chan *batchItem, MaxBatchSize),
 		closeChan:  make(chan struct{}),
+		stopChan: 	make(chan struct{}),
 	}
 	
 	// Start background tasks
@@ -172,10 +176,116 @@ func NewDB(config *DBConfig) (*DB, error) {
 	// Start batch processor
 	db.batchWg.Add(1)
 	go db.processBatchQueue()
+	db.wg.Add(2)
+	go db.runGC()
+	go db.runCompaction()
 	
 	fmt.Printf("✅ Database opened: %s (cache: %d entries)\n", config.Path, config.CacheSize)
-	
+
+
+	logger.Info("✅ Database initialized with background workers")
 	return db, nil
+}
+
+// 🔥 NEW: Background garbage collection
+func (db *DB) runGC() {
+	defer db.wg.Done()
+	
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+	
+	db.logger.Info("🗑️  Starting BadgerDB garbage collector")
+	
+	for {
+		select {
+		case <-ticker.C:
+			db.logger.Debug("Running BadgerDB value log GC")
+			
+		again:
+			err := db.db.RunValueLogGC(0.5) // Reclaim if >50% garbage
+			if err == nil {
+				// GC did work, continue
+				goto again
+			}
+			if err != badger.ErrNoRewrite {
+				db.logger.Warn("GC error", zap.Error(err))
+			}
+			
+		case <-db.stopChan:
+			db.logger.Info("GC worker stopped")
+			return
+		}
+	}
+}
+
+// 🔥 NEW: Background compaction
+func (db *DB) runCompaction() {
+	defer db.wg.Done()
+	
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+	
+	db.logger.Info("🔨 Starting BadgerDB compaction worker")
+	
+	for {
+		select {
+		case <-ticker.C:
+			db.logger.Debug("Running BadgerDB compaction")
+			if err := db.db.Flatten(2); err != nil {
+				db.logger.Warn("Compaction error", zap.Error(err))
+			}
+			
+		case <-db.stopChan:
+			db.logger.Info("Compaction worker stopped")
+			return
+		}
+	}
+}
+
+// 🔥 ENHANCED: Graceful close with cleanup
+func (db *DB) Close() error {
+	db.logger.Info("🛑 Closing database gracefully...")
+	
+	// Stop background workers
+	close(db.stopChan)
+	
+	// Wait for workers to finish (with timeout)
+	done := make(chan struct{})
+	go func() {
+		db.wg.Wait()
+		close(done)
+	}()
+	
+	select {
+	case <-done:
+		db.logger.Info("Background workers stopped")
+	case <-time.After(30 * time.Second):
+		db.logger.Warn("Background workers timeout")
+	}
+	
+	// Final garbage collection
+	db.logger.Info("Running final GC...")
+	for i := 0; i < 3; i++ {
+		if err := db.db.RunValueLogGC(0.7); err != nil {
+			break
+		}
+		db.logger.Debug("Final GC pass completed", zap.Int("pass", i+1))
+	}
+	
+	// Final compaction
+	db.logger.Info("Running final compaction...")
+	if err := db.db.Flatten(1); err != nil {
+		db.logger.Warn("Final compaction failed", zap.Error(err))
+	}
+	
+	// Close BadgerDB
+	db.logger.Info("Closing BadgerDB...")
+	if err := db.db.Close(); err != nil {
+		return fmt.Errorf("badger close failed: %w", err)
+	}
+	
+	db.logger.Info("✅ Database closed successfully")
+	return nil
 }
 
 func (db *DB) GetBadger() *badger.DB {
