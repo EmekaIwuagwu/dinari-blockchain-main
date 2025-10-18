@@ -1,0 +1,106 @@
+//internal/core/state.go
+
+package core
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math/big"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/dgraph-io/badger/v4"
+	"go.uber.org/zap"
+)
+var (
+	// State key prefixes for BadgerDB
+	prefixAccount   = []byte("acc:")       // acc:<address> -> AccountState
+	prefixNonce     = []byte("nonce:")     // nonce:<address> -> uint64
+	prefixCode      = []byte("code:")      // code:<address> -> bytecode (for future smart contracts)
+	prefixStateRoot = []byte("stateroot:") // stateroot:<height> -> merkle root
+
+	// Special keys
+	keyLatestState  = []byte("state:latest")
+	keyStateVersion = []byte("state:version")
+
+	// State version for compatibility
+	currentStateVersion = uint64(1)
+
+	// Errors
+	ErrAccountNotFound     = errors.New("account not found")
+	ErrInsufficientBalance = errors.New("insufficient balance")
+	ErrInvalidNonce        = errors.New("invalid nonce")
+	ErrStateCorrupted      = errors.New("state corrupted")
+	ErrNegativeBalance     = errors.New("balance cannot be negative")
+	ErrCheckpointNotFound  = errors.New("checkpoint not found")
+)
+
+// TokenType represents the type of token
+type TokenType string
+
+const (
+	TokenDNT TokenType = "DNT"
+	TokenAFC TokenType = "AFC"
+)
+
+// AccountState represents an account's state
+type AccountState struct {
+	Address    string   `json:"address"`
+	BalanceDNT *big.Int `json:"balanceDNT"` // DINARI balance
+	BalanceAFC *big.Int `json:"balanceAFC"` // Afrocoin balance
+	Nonce      uint64   `json:"nonce"`
+	CodeHash   []byte   `json:"codeHash,omitempty"` // For smart contracts (future)
+
+	// Metadata
+	CreatedAt int64 `json:"createdAt"`
+	UpdatedAt int64 `json:"updatedAt"`
+}
+
+// NewAccountState creates a new account state
+func NewAccountState(address string) *AccountState {
+	return &AccountState{
+		Address:    address,
+		BalanceDNT: big.NewInt(0),
+		BalanceAFC: big.NewInt(0),
+		Nonce:      0,
+		CreatedAt:  0,
+		UpdatedAt:  0,
+	}
+}
+
+// Copy creates a deep copy of account state
+func (a *AccountState) Copy() *AccountState {
+	return &AccountState{
+		Address:    a.Address,
+		BalanceDNT: new(big.Int).Set(a.BalanceDNT),
+		BalanceAFC: new(big.Int).Set(a.BalanceAFC),
+		Nonce:      a.Nonce,
+		CodeHash:   append([]byte(nil), a.CodeHash...),
+		CreatedAt:  a.CreatedAt,
+		UpdatedAt:  a.UpdatedAt,
+	}
+}
+
+// 🔥 NEW: WAL Entry structure
+type WALEntry struct {
+	BlockHeight uint64                    `json:"block_height"`
+	BlockHash   string                    `json:"block_hash"`
+	Accounts    map[string]AccountState   `json:"accounts"`
+	Timestamp   int64                     `json:"timestamp"`
+}
+
+// 🔥 NEW: Checkpoint structure
+type Checkpoint struct {
+	Height    uint64    `json:"height"`
+	Hash      string    `json:"hash"`
+	Timestamp time.Time `json:"timestamp"`
+}
+

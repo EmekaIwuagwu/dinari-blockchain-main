@@ -897,14 +897,13 @@ func (n *Node) Shutdown(ctx context.Context) error {
 		}
 	}
 
-
-// 🔥 STEP 6: Stop monitoring and metrics
+	// 🔥 STEP 6: Stop monitoring and metrics
 	n.logger.Info("Step 6/8: Stopping monitoring services")
 	if n.metricsServer != nil {
-		metricsCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		_, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
-		if err := n.metricsServer.Shutdown(metricsCtx); err != nil {
+		if err := n.metricsServer.Shutdown(shutdownCtx); err != nil {
 			n.logger.Error("❌ Metrics server shutdown error", zap.Error(err))
 			shutdownErrors = append(shutdownErrors, fmt.Errorf("metrics shutdown: %w", err))
 		} else {
@@ -913,10 +912,10 @@ func (n *Node) Shutdown(ctx context.Context) error {
 	}
 
 	if n.pprofServer != nil {
-		pprofCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		_, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
-		if err := n.pprofServer.Shutdown(pprofCtx); err != nil {
+		if err := n.pprofServer.Shutdown(shutdownCtx); err != nil {
 			n.logger.Error("❌ Pprof server shutdown error", zap.Error(err))
 			shutdownErrors = append(shutdownErrors, fmt.Errorf("pprof shutdown: %w", err))
 		} else {
