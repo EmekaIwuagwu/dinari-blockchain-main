@@ -139,15 +139,13 @@ type BlockchainStats struct {
 }
 
 // NewBlockchain creates a new blockchain instance
+// NewBlockchain creates a new blockchain instance
 func NewBlockchain(db *badger.DB, state *StateDB, genesisBlock *Block) (*Blockchain, error) {
 	if db == nil {
 		return nil, errors.New("database cannot be nil")
 	}
 	if state == nil {
 		return nil, errors.New("state cannot be nil")
-	}
-	if genesisBlock == nil {
-		return nil, errors.New("genesis block cannot be nil")
 	}
 	
 	bc := &Blockchain{
@@ -156,7 +154,7 @@ func NewBlockchain(db *badger.DB, state *StateDB, genesisBlock *Block) (*Blockch
 		orphans:      make(map[string]*OrphanBlock),
 		blockCache:   make(map[uint64]*Block),
 		maxCacheSize: 100,
-		genesisBlock: genesisBlock,
+		genesisBlock: genesisBlock, // Can be nil - will be set in initialize()
 	}
 	
 	// Initialize or load chain state
@@ -172,8 +170,9 @@ func (bc *Blockchain) GetState() *StateDB {
 }
 
 // initialize sets up the blockchain (genesis or load existing)
+// initialize sets up the blockchain (genesis or load existing)
 func (bc *Blockchain) initialize() error {
-	// Check if genesis exists
+	// Check if genesis exists in database
 	var genesisHash []byte
 	err := bc.db.View(func(txn *badger.Txn) error {
 		item, err := txn.Get(keyGenesisHash)
@@ -193,10 +192,35 @@ func (bc *Blockchain) initialize() error {
 		return err
 	}
 	
-	// If genesis doesn't exist, create it
+	// If genesis doesn't exist in database, create it
 	if genesisHash == nil {
+		// Use provided genesis block, or create default if nil
+		if bc.genesisBlock == nil {
+			// Create default genesis with CURRENT timestamp
+			bc.genesisBlock = &Block{
+				Header: &BlockHeader{
+					Version:       1,
+					Height:        0,
+					PrevBlockHash: []byte{},
+					MerkleRoot:    []byte{},
+					Timestamp:     time.Now().Unix(), // ← Fresh timestamp!
+					Difficulty:    16777216,
+					Nonce:         0,
+					Hash:          []byte{},
+					StateRoot:     []byte{},
+				},
+				Transactions: []*types.Transaction{},
+			}
+		}
 		return bc.createGenesis()
 	}
+	
+	// Genesis exists - load it from database and use it
+	existingGenesis, err := bc.GetBlockByHeight(0)
+	if err != nil {
+		return fmt.Errorf("failed to load existing genesis: %w", err)
+	}
+	bc.genesisBlock = existingGenesis
 	
 	// Load chain state
 	return bc.loadChainState()

@@ -23,7 +23,7 @@ import (
 	"github.com/EmekaIwuagwu/dinari-blockchain/internal/miner"
 	"github.com/EmekaIwuagwu/dinari-blockchain/internal/p2p"
 	"github.com/EmekaIwuagwu/dinari-blockchain/internal/storage"
-	"github.com/EmekaIwuagwu/dinari-blockchain/internal/types"
+	//"github.com/EmekaIwuagwu/dinari-blockchain/internal/types"
 	"github.com/EmekaIwuagwu/dinari-blockchain/pkg/api"
 	"github.com/EmekaIwuagwu/dinari-blockchain/pkg/crypto"
 	"github.com/EmekaIwuagwu/dinari-blockchain/pkg/monitoring"
@@ -440,25 +440,8 @@ func initializeNode(ctx context.Context, logger *zap.Logger, config *Config) (*N
 	}
 
 	// Create genesis block
-	logger.Info("Creating genesis block")
-	genesisBlock := &core.Block{
-	Header: &core.BlockHeader{
-		Version:       1,
-		Height:        0,
-		PrevBlockHash: []byte{},
-		MerkleRoot:    []byte{},
-		Timestamp:     time.Now().Unix(),
-		Difficulty:    16777216, // MUCH HIGHER - should take ~15 seconds
-		Nonce:         0,
-		Hash:          []byte{},
-		StateRoot:     []byte{},
-	},
-	Transactions: []*types.Transaction{},
-}
-
-	// Initialize blockchain with genesis block
 	logger.Info("Initializing blockchain")
-	blockchain, err := core.NewBlockchain(db.GetBadger(), stateDB, genesisBlock)
+	blockchain, err := core.NewBlockchain(db.GetBadger(), stateDB, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize blockchain: %w", err)
 	}
