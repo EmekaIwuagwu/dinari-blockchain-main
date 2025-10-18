@@ -34,7 +34,7 @@ const (
 	// Time validation - STRICT for production
 	MaxFutureBlockTime   = 2 * time.Minute    // Only 2 minutes in future
 	MinBlockTimeInterval = 15 * time.Second   // ENFORCE 15 second minimum
-	MaxBlockTimeInterval = 10 * 15 * time.Second // Max 10x target time
+	MaxBlockTimeInterval = 24 * 3600 * time.Second // Max 10x target time
 	
 	// Mining parameters
 	MaxNonce = 0xFFFFFFFFFFFFFFFF
