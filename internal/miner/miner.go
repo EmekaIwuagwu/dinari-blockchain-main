@@ -91,6 +91,7 @@ type BlockTemplate struct {
 type MiningStats struct {
 	BlocksMined      uint64
 	BlocksRejected   uint64
+	TimestampRejections uint64 // 🔥 NEW
 	TotalHashrate    uint64
 	LastBlockTime    time.Time
 	TotalReward      *big.Int
@@ -139,7 +140,8 @@ func (m *Miner) Start() error {
 func (m *Miner) miningCoordinator() {
 	defer m.wg.Done()
 	
-	ticker := time.NewTicker(2 * time.Second)
+	// 🔥 CRITICAL: Refresh every 5 seconds for template freshness
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	
 	for {
@@ -153,10 +155,17 @@ func (m *Miner) miningCoordinator() {
 				continue
 			}
 			
+			// 🔥 CRITICAL: Always try to refresh on each tick
 			if err := m.refreshBlockTemplate(); err != nil {
 				if !strings.Contains(err.Error(), "too early") {
 					fmt.Printf("⚠️  Template refresh error: %v\n", err)
 				}
+				continue
+			}
+			
+			// 🔥 NEW: Check if template is stale before starting workers
+			if m.isTemplateStale() {
+				fmt.Printf("⚠️  Template is stale, forcing refresh...\n")
 				continue
 			}
 			
@@ -165,6 +174,26 @@ func (m *Miner) miningCoordinator() {
 			}
 		}
 	}
+}
+
+
+func (m *Miner) isTemplateStale() bool {
+	m.templateMu.RLock()
+	template := m.currentTemplate
+	m.templateMu.RUnlock()
+	
+	if template == nil {
+		return true
+	}
+	
+	// Template is stale if timestamp is more than 10 seconds old
+	age := time.Now().Unix() - template.Header.Timestamp
+	if age > 10 {
+		fmt.Printf("🕐 Template age: %d seconds (stale threshold: 10 sec)\n", age)
+		return true
+	}
+	
+	return false
 }
 
 func (m *Miner) canMineNewBlock() bool {
@@ -354,8 +383,12 @@ func (m *Miner) hasActiveWorkers() bool {
 	return len(m.workers) > 0
 }
 
+// internal/miner/miner.go
+
 func (w *MiningWorker) mine() {
 	defer w.miner.wg.Done()
+	
+	lastTemplateCheck := time.Now()
 	
 	for {
 		select {
@@ -363,6 +396,29 @@ func (w *MiningWorker) mine() {
 			return
 			
 		default:
+			// 🔥 NEW: Check template freshness every 5 seconds
+			if time.Since(lastTemplateCheck) > 5*time.Second {
+				lastTemplateCheck = time.Now()
+				
+				w.miner.templateMu.RLock()
+				template := w.miner.currentTemplate
+				w.miner.templateMu.RUnlock()
+				
+				if template == nil {
+					time.Sleep(100 * time.Millisecond)
+					continue
+				}
+				
+				// 🔥 CRITICAL: Abandon if template is >10 seconds old
+				templateAge := time.Now().Unix() - template.Header.Timestamp
+				if templateAge > 10 {
+					fmt.Printf("⏰ Worker %d: Template stale (%d sec old), waiting for refresh\n", 
+						w.id, templateAge)
+					time.Sleep(time.Second)
+					continue
+				}
+			}
+			
 			w.miner.templateMu.RLock()
 			template := w.miner.currentTemplate
 			w.miner.templateMu.RUnlock()
@@ -372,6 +428,7 @@ func (w *MiningWorker) mine() {
 				continue
 			}
 			
+			// 🔥 Double-check validity before mining
 			if !w.isTimestampStillValid(template) {
 				time.Sleep(time.Second)
 				continue
@@ -433,31 +490,68 @@ func (w *MiningWorker) handleBlockFound(template *BlockTemplate, nonce uint64, h
 		return
 	}
 	
+	// 🔥 CRITICAL FIX: Update timestamp to NOW before validation
+	currentTime := time.Now().Unix()
+	
+	// Ensure timestamp is at least 15 seconds after previous block
 	if template.Header.Height > 1 {
 		prevBlock, err := w.miner.blockchain.GetBlockByHeight(template.Header.Height - 1)
 		if err == nil && prevBlock != nil {
-			timeDiff := template.Header.Timestamp - prevBlock.Header.Timestamp
+			minTime := prevBlock.Header.Timestamp + int64(TargetBlockTime.Seconds())
+			if currentTime < minTime {
+				currentTime = minTime
+			}
+			
+			timeDiff := currentTime - prevBlock.Header.Timestamp
+			
+			// 🔥 PRODUCTION CHECK: Verify interval is valid BEFORE submission
 			if timeDiff < int64(TargetBlockTime.Seconds()) {
-				fmt.Printf("❌ REJECTED: Block interval too small (%d sec < %d sec required)\n", 
-					timeDiff, int(TargetBlockTime.Seconds()))
+				fmt.Printf("⚠️  Block interval too small (%d sec), waiting...\n", timeDiff)
 				return
 			}
+			
+			// This should never happen with 24-hour limit, but defensive check
+			const MaxAllowedInterval = 24 * 3600 // 24 hours
+			if timeDiff > MaxAllowedInterval {
+				fmt.Printf("❌ Block interval impossibly large (%d sec), template corrupted\n", timeDiff)
+				return
+			}
+			
+			fmt.Printf("✅ Valid interval: %d seconds (min: %d, max: %d)\n", 
+				timeDiff, int(TargetBlockTime.Seconds()), MaxAllowedInterval)
 		}
 	}
 	
-	fmt.Printf("\n🎉 VALID BLOCK FOUND!\n")
-	fmt.Printf("   Height: %d | Nonce: %d | Timestamp: %d\n", 
-		template.Header.Height, nonce, template.Header.Timestamp)
+	// 🔥 CRITICAL: Update template timestamp to current time
+	template.Header.Timestamp = currentTime
 	
+	// 🔥 CRITICAL: Recalculate hash with new timestamp
+	template.Header.Nonce = nonce
+	newHash := w.miner.blockchain.CalculateBlockHash(template.Header)
+	
+	// 🔥 CRITICAL: Verify new hash still meets difficulty
+	target := w.miner.pow.DifficultyToTarget(template.Header.Difficulty)
+	hashInt := new(big.Int).SetBytes(newHash)
+	
+	if hashInt.Cmp(target) > 0 {
+		fmt.Printf("⚠️  Timestamp update invalidated PoW, discarding block\n")
+		return
+	}
+	
+	fmt.Printf("\n🎉 VALID BLOCK FOUND!\n")
+	fmt.Printf("   Height: %d | Nonce: %d | Timestamp: %d (FRESH)\n", 
+		template.Header.Height, nonce, currentTime)
+	
+	// Create final header with updated timestamp and hash
 	finalHeader := &types.BlockHeader{
 		Version:       template.Header.Version,
 		Height:        template.Header.Height,
 		PrevBlockHash: template.Header.PrevBlockHash,
 		MerkleRoot:    template.Header.MerkleRoot,
-		Timestamp:     template.Header.Timestamp,
+		Timestamp:     currentTime, // 🔥 FRESH TIMESTAMP
 		Difficulty:    template.Header.Difficulty,
 		Nonce:         nonce,
-		Hash:          hash,
+		Hash:          newHash, // 🔥 RECALCULATED HASH
 		StateRoot:     template.Header.StateRoot,
 	}
 	
@@ -468,31 +562,64 @@ func (w *MiningWorker) handleBlockFound(template *BlockTemplate, nonce uint64, h
 	
 	if err := w.miner.blockchain.AddBlock(block); err != nil {
 		fmt.Printf("❌ Block rejected: %v\n", err)
+		
+		// 🔥 MONITORING: Track timestamp rejections
+		if strings.Contains(err.Error(), "timestamp") {
+			w.miner.statsMu.Lock()
+			w.miner.stats.TimestampRejections++
+			rejections := w.miner.stats.TimestampRejections
+			w.miner.statsMu.Unlock()
+			
+			// 🔥 ALERT: Too many timestamp rejections
+			if rejections > 5 {
+				fmt.Printf("🚨 ALERT: %d consecutive timestamp rejections!\n", rejections)
+				fmt.Printf("🚨 This indicates template refresh is failing!\n")
+				// Could send alert to monitoring system here
+			}
+			
+			// 🔥 Force template refresh on timestamp rejection
+			fmt.Printf("🔄 Timestamp rejection - forcing template refresh\n")
+			go w.miner.forceTemplateRefresh()
+		}
+		
 		w.miner.statsMu.Lock()
 		w.miner.stats.BlocksRejected++
 		w.miner.statsMu.Unlock()
 		return
 	}
 	
+	// ✅ SUCCESS PATH
 	w.miner.lastSubmitted = template.Header.Height
 	w.miner.lastSubmittedTime = time.Now()
 	
+	// 🔥 Reset timestamp rejection counter on success
 	w.miner.statsMu.Lock()
 	w.miner.stats.BlocksMined++
 	w.miner.stats.LastBlockTime = time.Now()
 	w.miner.stats.TotalReward.Add(w.miner.stats.TotalReward, template.BlockReward)
 	w.miner.stats.TotalFees.Add(w.miner.stats.TotalFees, template.TotalFees)
+	w.miner.stats.TimestampRejections = 0 // 🔥 Reset counter on success
 	w.miner.statsMu.Unlock()
 	
 	fmt.Printf("✅ Block #%d ACCEPTED and added to chain\n", template.Header.Height)
-	fmt.Printf("   📦 Block Hash:    %x\n", hash)
+	fmt.Printf("   📦 Block Hash:    %x\n", newHash)
 	fmt.Printf("   🔗 Previous Hash: %x\n", template.Header.PrevBlockHash)
 	fmt.Printf("   💰 Reward: %s DNT | Fees: %s DNT\n", 
 		formatAmount(template.BlockReward), formatAmount(template.TotalFees))
 	fmt.Printf("   ⛏️  Nonce: %d | Difficulty: %d\n", nonce, template.Header.Difficulty)
-	fmt.Printf("   ⏱️  Timestamp: %d\n\n", template.Header.Timestamp)
+	fmt.Printf("   ⏱️  Timestamp: %d\n\n", currentTime)
 	
 	w.miner.stopWorkers()
+}
+
+// 🔥 NEW: Force template refresh (called on rejection)
+func (m *Miner) forceTemplateRefresh() {
+	time.Sleep(100 * time.Millisecond) // Brief pause to avoid race
+	if err := m.refreshBlockTemplate(); err != nil {
+		fmt.Printf("⚠️  Force refresh failed: %v\n", err)
+	} else {
+		fmt.Printf("✅ Template forcibly refreshed\n")
+	}
 }
 
 func (m *Miner) selectTransactions(txs []*types.Transaction) ([]*types.Transaction, *big.Int) {
