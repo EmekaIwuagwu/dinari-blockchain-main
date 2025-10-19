@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	"github.com/EmekaIwuagwu/dinari-blockchain/internal/types"
+	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/EmekaIwuagwu/dinari-blockchain/pkg/crypto"
 )
 
@@ -28,6 +29,7 @@ func sortTransactionsByTimestamp(txs []interface{}) {
 		return timeI > timeJ // Descending order (newest first)
 	})
 }
+
 
 // handleTxSend sends a new transaction
 func (s *Server) handleTxSend(params json.RawMessage) (interface{}, *RPCError) {
@@ -54,13 +56,23 @@ func (s *Server) handleTxSend(params json.RawMessage) (interface{}, *RPCError) {
 		return nil, &RPCError{Code: -32602, Message: "invalid fee"}
 	}
 
-	privKey, err := crypto.PrivateKeyFromHex(req.PrivateKey)
+	// 🔥 FIXED: Try both hex and WIF formats
+	var privKey interface{}
+	var err error
+
+	// First try hex format
+	privKey, err = crypto.PrivateKeyFromHex(req.PrivateKey)
 	if err != nil {
-		return nil, &RPCError{Code: -32602, Message: "invalid private key"}
+		// If hex fails, try WIF format
+		privKey, err = crypto.PrivateKeyFromWIF(req.PrivateKey)
+		if err != nil {
+			return nil, &RPCError{Code: -32602, Message: "invalid private key (must be hex or WIF format)"}
+		}
 	}
 
 	// Convert to ECDSA types
-	ecdsaPrivKey := privKey.ToECDSA()
+	btcecPrivKey := privKey.(*btcec.PrivateKey)
+	ecdsaPrivKey := btcecPrivKey.ToECDSA()
 	ecdsaPubKey := &ecdsaPrivKey.PublicKey
 	
 	tx := &types.Transaction{
