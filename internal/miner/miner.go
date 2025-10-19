@@ -490,8 +490,11 @@ func (w *MiningWorker) handleBlockFound(template *BlockTemplate, nonce uint64, h
 		return
 	}
 	
-	// Get current real time
-	currentTime := time.Now().Unix()
+	// 🔥 CRITICAL: Validate timestamp BEFORE using the nonce
+	// The nonce was found for the template's original timestamp
+	// We can only adjust the timestamp within valid ranges
+	
+	finalTimestamp := template.Header.Timestamp  // Start with template timestamp
 	
 	// For blocks after genesis, enforce timestamp rules
 	if template.Header.Height > 1 {
@@ -504,21 +507,23 @@ func (w *MiningWorker) handleBlockFound(template *BlockTemplate, nonce uint64, h
 		minTime := prevBlock.Header.Timestamp + int64(TargetBlockTime.Seconds())
 		maxTime := prevBlock.Header.Timestamp + int64(300) // 5 minutes max
 		
-		// 🔥 FIXED: Handle timestamp intelligently
-		if currentTime < minTime {
-			// Mining was too fast - use minimum allowed timestamp
-			fmt.Printf("⏳ Block mined too early (mining took %d sec), using minimum timestamp\n", 
-				currentTime-template.Header.Timestamp)
-			currentTime = minTime
-		} else if currentTime > maxTime {
-			// Mining took too long - CAP at maximum to avoid rejection
-			fmt.Printf("⚠️  Block mining took too long (%d sec), capping timestamp to max interval (300s)\n", 
-				currentTime-template.Header.Timestamp)
-			currentTime = maxTime
+		// 🔥 IMPORTANT: Use template timestamp, not current time
+		// because the nonce was mined with that timestamp
+		templateTime := template.Header.Timestamp
+		
+		// Validate template timestamp is within range
+		if templateTime < minTime {
+			fmt.Printf("❌ Template timestamp %d is before minimum %d\n", templateTime, minTime)
+			return
+		}
+		
+		if templateTime > maxTime {
+			fmt.Printf("❌ Template timestamp %d exceeds maximum %d\n", templateTime, maxTime)
+			return
 		}
 		
 		// Calculate actual interval that will be used
-		timeDiff := currentTime - prevBlock.Header.Timestamp
+		timeDiff := templateTime - prevBlock.Header.Timestamp
 		
 		// 🔥 DEFENSIVE: Double-check interval is valid before submission
 		if timeDiff < int64(TargetBlockTime.Seconds()) {
@@ -533,38 +538,39 @@ func (w *MiningWorker) handleBlockFound(template *BlockTemplate, nonce uint64, h
 		}
 		
 		fmt.Printf("✅ Valid interval: %d seconds (range: 15-300 sec)\n", timeDiff)
+		finalTimestamp = templateTime
 	}
 	
-	// 🔥 CRITICAL: Update template timestamp to the calculated time
-	template.Header.Timestamp = currentTime
-	
-	// 🔥 CRITICAL: Recalculate hash with new timestamp
+	// 🔥 CRITICAL: Keep the header timestamp as-is for hash verification
+	// The nonce was found with this timestamp, so the hash must be valid
 	template.Header.Nonce = nonce
-	newHash := w.miner.blockchain.CalculateBlockHash(template.Header)
 	
-	// 🔥 CRITICAL: Verify new hash still meets difficulty
+	// Verify the hash with original timestamp and nonce
+	verifyHash := w.miner.blockchain.CalculateBlockHash(template.Header)
+	
+	// 🔥 CRITICAL: Verify hash still meets difficulty
 	target := w.miner.pow.DifficultyToTarget(template.Header.Difficulty)
-	hashInt := new(big.Int).SetBytes(newHash)
+	hashInt := new(big.Int).SetBytes(verifyHash)
 	
 	if hashInt.Cmp(target) > 0 {
-		fmt.Printf("⚠️  Timestamp update invalidated PoW, discarding block\n")
+		fmt.Printf("⚠️  Hash verification failed - doesn't meet difficulty target\n")
 		return
 	}
 	
 	fmt.Printf("\n🎉 VALID BLOCK FOUND!\n")
-	fmt.Printf("   Height: %d | Nonce: %d | Timestamp: %d (FRESH)\n", 
-		template.Header.Height, nonce, currentTime)
+	fmt.Printf("   Height: %d | Nonce: %d | Timestamp: %d\n", 
+		template.Header.Height, nonce, finalTimestamp)
 	
-	// Create final header with updated timestamp and hash
+	// Create final header with verified data
 	finalHeader := &types.BlockHeader{
 		Version:       template.Header.Version,
 		Height:        template.Header.Height,
 		PrevBlockHash: template.Header.PrevBlockHash,
 		MerkleRoot:    template.Header.MerkleRoot,
-		Timestamp:     currentTime, // 🔥 FRESH TIMESTAMP
+		Timestamp:     finalTimestamp,  // Use the validated template timestamp
 		Difficulty:    template.Header.Difficulty,
 		Nonce:         nonce,
-		Hash:          newHash, // 🔥 RECALCULATED HASH
+		Hash:          verifyHash,      // Use the verified hash
 		StateRoot:     template.Header.StateRoot,
 	}
 	
@@ -614,12 +620,12 @@ func (w *MiningWorker) handleBlockFound(template *BlockTemplate, nonce uint64, h
 	w.miner.statsMu.Unlock()
 	
 	fmt.Printf("✅ Block #%d ACCEPTED and added to chain\n", template.Header.Height)
-	fmt.Printf("   📦 Block Hash:    %x\n", newHash)
+	fmt.Printf("   📦 Block Hash:    %x\n", verifyHash)
 	fmt.Printf("   🔗 Previous Hash: %x\n", template.Header.PrevBlockHash)
 	fmt.Printf("   💰 Reward: %s DNT | Fees: %s DNT\n", 
 		formatAmount(template.BlockReward), formatAmount(template.TotalFees))
 	fmt.Printf("   ⛏️  Nonce: %d | Difficulty: %d\n", nonce, template.Header.Difficulty)
-	fmt.Printf("   ⏱️  Timestamp: %d\n\n", currentTime)
+	fmt.Printf("   ⏱️  Timestamp: %d\n\n", finalTimestamp)
 	
 	w.miner.stopWorkers()
 }
