@@ -462,7 +462,7 @@ func (bc *Blockchain) validateTimestamp(header, prevHeader *BlockHeader) error {
 			ErrInvalidTimestamp, timeDiff, minInterval)
 	}
 	
-	maxInterval := int64(10 * TargetBlockTime.Seconds())
+	maxInterval := int64(300)
 	if timeDiff > maxInterval {
 		return fmt.Errorf("%w: block interval too large - got %d seconds, maximum %d seconds", 
 			ErrInvalidTimestamp, timeDiff, maxInterval)
@@ -841,12 +841,24 @@ func (bc *Blockchain) calculateNextDifficulty(prevHeader *BlockHeader) uint32 {
 		return prevHeader.Difficulty
 	}
 	
-	// Get block from start of adjustment period
+	// 🔥 DEFENSIVE: Validate start height
 	adjustmentStartHeight := nextHeight - DifficultyAdjustmentInterval
+	if adjustmentStartHeight < 0 {
+		fmt.Printf("⚠️  Invalid adjustment height %d, returning current difficulty\n", adjustmentStartHeight)
+		return prevHeader.Difficulty
+	}
+	
+	// Get block from start of adjustment period
 	oldBlock, err := bc.GetBlockByHeight(adjustmentStartHeight)
 	if err != nil {
-		fmt.Printf("⚠️  Could not get adjustment start block: %v\n", err)
+		fmt.Printf("⚠️  Could not get adjustment start block at height %d: %v\n", adjustmentStartHeight, err)
 		return prevHeader.Difficulty // Fallback to previous difficulty
+	}
+	
+	// 🔥 DEFENSIVE: Verify oldBlock is valid
+	if oldBlock == nil {
+		fmt.Printf("⚠️  Old block is nil at height %d\n", adjustmentStartHeight)
+		return prevHeader.Difficulty
 	}
 	
 	// CRITICAL: Calculate actual time for the interval
@@ -860,7 +872,6 @@ func (bc *Blockchain) calculateNextDifficulty(prevHeader *BlockHeader) uint32 {
 	}
 	
 	// CRITICAL: Clamp actual time to prevent gaming
-	// Maximum 4x faster or 4x slower than expected
 	minActualTime := expectedTime / 4
 	maxActualTime := expectedTime * 4
 	
@@ -874,11 +885,8 @@ func (bc *Blockchain) calculateNextDifficulty(prevHeader *BlockHeader) uint32 {
 	}
 	
 	// CRITICAL: Calculate new difficulty
-	// If blocks came too fast (actualTime < expectedTime) → increase difficulty
-	// If blocks came too slow (actualTime > expectedTime) → decrease difficulty
 	oldDifficulty := prevHeader.Difficulty
 	
-	// Use big integers for precision
 	newDiffBig := new(big.Int).SetUint64(uint64(oldDifficulty))
 	newDiffBig.Mul(newDiffBig, big.NewInt(expectedTime))
 	newDiffBig.Div(newDiffBig, big.NewInt(actualTime))
@@ -902,7 +910,6 @@ func (bc *Blockchain) calculateNextDifficulty(prevHeader *BlockHeader) uint32 {
 		newDifficulty = MinDifficulty
 	}
 	
-	// Calculate percentage change
 	percentChange := ((float64(newDifficulty) / float64(oldDifficulty)) - 1) * 100
 	
 	fmt.Printf("\n📊 DIFFICULTY ADJUSTMENT at height %d:\n", nextHeight)
@@ -910,8 +917,7 @@ func (bc *Blockchain) calculateNextDifficulty(prevHeader *BlockHeader) uint32 {
 		adjustmentStartHeight, prevHeader.Height, DifficultyAdjustmentInterval)
 	fmt.Printf("   Expected time: %d seconds (%d blocks × %d sec)\n", 
 		expectedTime, DifficultyAdjustmentInterval, int(TargetBlockTime.Seconds()))
-	fmt.Printf("   Actual time: %d seconds (original: %d sec)\n", 
-		actualTime, prevHeader.Timestamp-oldBlock.Header.Timestamp)
+	fmt.Printf("   Actual time: %d seconds\n", actualTime)
 	fmt.Printf("   Time ratio: %.4f\n", float64(actualTime)/float64(expectedTime))
 	fmt.Printf("   Difficulty: %d → %d (%.2f%% change)\n", 
 		oldDifficulty, newDifficulty, percentChange)

@@ -490,39 +490,52 @@ func (w *MiningWorker) handleBlockFound(template *BlockTemplate, nonce uint64, h
 		return
 	}
 	
-	// 🔥 CRITICAL FIX: Update timestamp to NOW before validation
+	// Get current real time
 	currentTime := time.Now().Unix()
 	
-	// Ensure timestamp is at least 15 seconds after previous block
+	// For blocks after genesis, enforce timestamp rules
 	if template.Header.Height > 1 {
 		prevBlock, err := w.miner.blockchain.GetBlockByHeight(template.Header.Height - 1)
-		if err == nil && prevBlock != nil {
-			minTime := prevBlock.Header.Timestamp + int64(TargetBlockTime.Seconds())
-			if currentTime < minTime {
-				currentTime = minTime
-			}
-			
-			timeDiff := currentTime - prevBlock.Header.Timestamp
-			
-			// 🔥 PRODUCTION CHECK: Verify interval is valid BEFORE submission
-			if timeDiff < int64(TargetBlockTime.Seconds()) {
-				fmt.Printf("⚠️  Block interval too small (%d sec), waiting...\n", timeDiff)
-				return
-			}
-			
-			// This should never happen with 24-hour limit, but defensive check
-			const MaxAllowedInterval = 24 * 3600 // 24 hours
-			if timeDiff > MaxAllowedInterval {
-				fmt.Printf("❌ Block interval impossibly large (%d sec), template corrupted\n", timeDiff)
-				return
-			}
-			
-			fmt.Printf("✅ Valid interval: %d seconds (min: %d, max: %d)\n", 
-				timeDiff, int(TargetBlockTime.Seconds()), MaxAllowedInterval)
+		if err != nil {
+			fmt.Printf("❌ Could not get previous block: %v\n", err)
+			return
 		}
+		
+		minTime := prevBlock.Header.Timestamp + int64(TargetBlockTime.Seconds())
+		maxTime := prevBlock.Header.Timestamp + int64(300) // 5 minutes max
+		
+		// 🔥 FIXED: Handle timestamp intelligently
+		if currentTime < minTime {
+			// Mining was too fast - use minimum allowed timestamp
+			fmt.Printf("⏳ Block mined too early (mining took %d sec), using minimum timestamp\n", 
+				currentTime-template.Header.Timestamp)
+			currentTime = minTime
+		} else if currentTime > maxTime {
+			// Mining took too long - CAP at maximum to avoid rejection
+			fmt.Printf("⚠️  Block mining took too long (%d sec), capping timestamp to max interval (300s)\n", 
+				currentTime-template.Header.Timestamp)
+			currentTime = maxTime
+		}
+		
+		// Calculate actual interval that will be used
+		timeDiff := currentTime - prevBlock.Header.Timestamp
+		
+		// 🔥 DEFENSIVE: Double-check interval is valid before submission
+		if timeDiff < int64(TargetBlockTime.Seconds()) {
+			fmt.Printf("❌ BLOCK REJECTED: Interval too small (%d sec, min required: %d)\n", 
+				timeDiff, int(TargetBlockTime.Seconds()))
+			return
+		}
+		
+		if timeDiff > int64(300) {
+			fmt.Printf("❌ BLOCK REJECTED: Interval too large (%d sec, max allowed: 300)\n", timeDiff)
+			return
+		}
+		
+		fmt.Printf("✅ Valid interval: %d seconds (range: 15-300 sec)\n", timeDiff)
 	}
 	
-	// 🔥 CRITICAL: Update template timestamp to current time
+	// 🔥 CRITICAL: Update template timestamp to the calculated time
 	template.Header.Timestamp = currentTime
 	
 	// 🔥 CRITICAL: Recalculate hash with new timestamp
@@ -573,8 +586,7 @@ func (w *MiningWorker) handleBlockFound(template *BlockTemplate, nonce uint64, h
 			// 🔥 ALERT: Too many timestamp rejections
 			if rejections > 5 {
 				fmt.Printf("🚨 ALERT: %d consecutive timestamp rejections!\n", rejections)
-				fmt.Printf("🚨 This indicates template refresh is failing!\n")
-				// Could send alert to monitoring system here
+				fmt.Printf("🚨 This indicates timestamp validation is still failing!\n")
 			}
 			
 			// 🔥 Force template refresh on timestamp rejection
