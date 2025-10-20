@@ -101,16 +101,7 @@ func formatBlock(block *core.Block) map[string]interface{} {
 
 // handleChainGetHeight returns the current blockchain height
 func (s *Server) handleChainGetHeight(params json.RawMessage) (interface{}, *RPCError) {
-	// Try to get progressively higher blocks until we find the highest
-	height := uint64(0)
-	for i := uint64(1); i <= 1000; i++ {
-		block, err := s.blockchain.GetBlockByHeight(i)
-		if err != nil || block == nil {
-			break
-		}
-		height = i
-	}
-
+	height := s.blockchain.GetHeight()
 	return map[string]interface{}{
 		"height": height,
 	}, nil
