@@ -565,6 +565,9 @@ func (s *StateDB) commitUnsafe() error {
 			s.merkleTree.Update(address, acc)
 		}
 		root := s.merkleTree.Root()
+		if root == nil || len(root) == 0 {
+			root = make([]byte, 32)
+		}
 		if err := txn.Set(keyLatestState, root); err != nil {
 			return fmt.Errorf("failed to save state root: %w", err)
 		}
@@ -573,11 +576,16 @@ func (s *StateDB) commitUnsafe() error {
 	if err != nil {
 		return fmt.Errorf("commit failed: %w", err)
 	}
-	for address, acc := range s.dirty {
-		s.cache[address] = acc.Copy()
+	// Add safety check before clearing
+	if len(s.dirty) > 0 {
+		for address, acc := range s.dirty {
+			if acc != nil {
+				s.cache[address] = acc.Copy()
+			}
+		}
 	}
 	s.dirty = make(map[string]*AccountState)
-	s.checkpoints = make([]map[string]*AccountState, 0)
+	s.checkpoints = make([]map[string]*AccountState, 0) // This is fine, but ensure dirty is cleared first
 	return nil
 }
 
