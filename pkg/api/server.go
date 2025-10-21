@@ -190,7 +190,7 @@ func (s *Server) SetMempool(mempool *mempool.Mempool) {
 func (s *Server) HandleTxSend(ctx context.Context, params json.RawMessage) (interface{}, error) {
 	result, rpcErr := s.handleTxSend(params)
 	if rpcErr != nil {
-		return nil, rpcErr
+		return nil, fmt.Errorf("%s", rpcErr.Message)  // ✅ Convert to regular error
 	}
 	return result, nil
 }

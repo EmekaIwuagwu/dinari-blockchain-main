@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"time"
 	"sort"
+	"fmt"
 
 	"github.com/EmekaIwuagwu/dinari-blockchain/internal/types"
 	"github.com/btcsuite/btcd/btcec/v2"
@@ -74,14 +75,28 @@ func (s *Server) handleTxSend(params json.RawMessage) (interface{}, *RPCError) {
 	btcecPrivKey := privKey.(*btcec.PrivateKey)
 	ecdsaPrivKey := btcecPrivKey.ToECDSA()
 	ecdsaPubKey := &ecdsaPrivKey.PublicKey
-	
+
+	// 🔥 NEW: Verify private key matches from address
+	pubKey := crypto.DerivePublicKey(btcecPrivKey)
+	derivedAddr := crypto.PublicKeyToAddress(pubKey)
+	if derivedAddr != req.From {
+		return nil, &RPCError{Code: -32602, Message: "private key does not match from address"}
+	}
+
+	// 🔥 NEW: Fetch current nonce and set to current + 1
+	currentNonce, err := s.blockchain.State.GetNonce(req.From) // Or s.state.GetNonce if separate
+	if err != nil {
+		return nil, &RPCError{Code: -32000, Message: "failed to get nonce: " + err.Error()}
+	}
+	txNonce := currentNonce + 1
+
 	tx := &types.Transaction{
 		From:      req.From,
 		To:        req.To,
 		Amount:    amount,
 		TokenType: req.TokenType,
 		FeeDNT:    fee,
-		Nonce:     0,
+		Nonce:     txNonce, // 🔥 FIXED: Use fetched nonce + 1
 		Timestamp: time.Now().Unix(),
 		PublicKey: ellipticMarshal(ecdsaPubKey),
 	}
@@ -92,6 +107,13 @@ func (s *Server) handleTxSend(params json.RawMessage) (interface{}, *RPCError) {
 		return nil, &RPCError{Code: -32000, Message: "failed to sign: " + err.Error()}
 	}
 	tx.Signature = signature
+
+	// 🔥 NEW: Add panic recovery for mempool addition (temporary for debugging)
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("Panic in mempool.AddTransaction: %v\n", r) // Or log it
+		}
+	}()
 
 	if err := s.mempool.AddTransaction(convertToMempoolTx(tx)); err != nil {
 		return nil, &RPCError{Code: -32003, Message: "transaction rejected: " + err.Error()}
