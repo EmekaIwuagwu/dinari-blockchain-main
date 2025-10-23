@@ -15,44 +15,44 @@ import (
 )
 
 const (
-	MaxTransactionSize      = 100 * 1024 // 100 KB
-	MaxTransactionAge       = 24 * time.Hour
-	MinGasPrice             = 1000
-	MaxGasLimit             = 10000000
-	HighValueThreshold      = 10000000000000 // 10M DNT (atomic units)
-	VeryHighValueThreshold  = 100000000000000 // 100M DNT
-	MaxDailyVelocity        = 1000000000000000 // 1B DNT per address per day
-	MaxOutputs              = 100
-	MaxInputs               = 100
+	MaxTransactionSize     = 100 * 1024 // 100 KB
+	MaxTransactionAge      = 24 * time.Hour
+	MinGasPrice            = 1000
+	MaxGasLimit            = 10000000
+	HighValueThreshold     = 10000000000000   // 10M DNT (atomic units)
+	VeryHighValueThreshold = 100000000000000  // 100M DNT
+	MaxDailyVelocity       = 1000000000000000 // 1B DNT per address per day
+	MaxOutputs             = 100
+	MaxInputs              = 100
 )
 
 var (
-	ErrInvalidTransaction     = errors.New("invalid transaction")
-	ErrInsufficientFunds      = errors.New("insufficient funds")
-	ErrInvalidSignature       = errors.New("invalid signature")
-	ErrInvalidPublicKey       = errors.New("invalid public key")
-	ErrNonceTooLow            = errors.New("nonce too low")
-	ErrNonceTooHigh           = errors.New("nonce too high")
-	ErrTransactionTooLarge    = errors.New("transaction size exceeds limit")
-	ErrTransactionExpired     = errors.New("transaction expired")
-	ErrInvalidAmount          = errors.New("invalid amount")
-	ErrInsufficientGas        = errors.New("insufficient gas")
-	ErrVelocityLimitExceeded  = errors.New("daily velocity limit exceeded")
-	ErrDoubleSpend            = errors.New("double spend detected")
-	ErrHighValueNoMultiSig    = errors.New("high value transaction requires multisig")
-	ErrInvalidRecipient       = errors.New("invalid recipient address")
-	ErrSelfTransfer           = errors.New("self transfer not allowed for high value")
-	ErrBlacklistedAddress     = errors.New("address is blacklisted")
+	ErrInvalidTransaction    = errors.New("invalid transaction")
+	ErrInsufficientFunds     = errors.New("insufficient funds")
+	ErrInvalidSignature      = errors.New("invalid signature")
+	ErrInvalidPublicKey      = errors.New("invalid public key")
+	ErrNonceTooLow           = errors.New("nonce too low")
+	ErrNonceTooHigh          = errors.New("nonce too high")
+	ErrTransactionTooLarge   = errors.New("transaction size exceeds limit")
+	ErrTransactionExpired    = errors.New("transaction expired")
+	ErrInvalidAmount         = errors.New("invalid amount")
+	ErrInsufficientGas       = errors.New("insufficient gas")
+	ErrVelocityLimitExceeded = errors.New("daily velocity limit exceeded")
+	ErrDoubleSpend           = errors.New("double spend detected")
+	ErrHighValueNoMultiSig   = errors.New("high value transaction requires multisig")
+	ErrInvalidRecipient      = errors.New("invalid recipient address")
+	ErrSelfTransfer          = errors.New("self transfer not allowed for high value")
+	ErrBlacklistedAddress    = errors.New("address is blacklisted")
 )
 
 type TransactionValidator struct {
-	km                *crypto.KeyManager
-	stateDB           StateDB
-	velocityTracker   *VelocityTracker
-	blacklistManager  *BlacklistManager
-	multiSigManager   *MultiSigManager
-	riskScorer        *RiskScorer
-	mu                sync.RWMutex
+	km               *crypto.KeyManager
+	stateDB          StateDB
+	velocityTracker  *VelocityTracker
+	blacklistManager *BlacklistManager
+	multiSigManager  *MultiSigManager
+	riskScorer       *RiskScorer
+	mu               sync.RWMutex
 }
 
 type VelocityTracker struct {
@@ -61,9 +61,9 @@ type VelocityTracker struct {
 }
 
 type DailyVolume struct {
-	Date       time.Time
-	Amount     *big.Int
-	TxCount    int
+	Date    time.Time
+	Amount  *big.Int
+	TxCount int
 }
 
 type BlacklistManager struct {
@@ -72,10 +72,10 @@ type BlacklistManager struct {
 }
 
 type BlacklistEntry struct {
-	Address    string
-	Reason     string
-	AddedAt    time.Time
-	ExpiresAt  *time.Time
+	Address   string
+	Reason    string
+	AddedAt   time.Time
+	ExpiresAt *time.Time
 }
 
 type MultiSigManager struct {
@@ -142,9 +142,9 @@ func NewRiskScorer() *RiskScorer {
 
 func (tv *TransactionValidator) ValidateTransaction(tx *types.Transaction, ctx *ValidationContext) *ValidationResult {
 	result := &ValidationResult{
-		Valid:       true,
-		Warnings:    make([]string, 0),
-		RiskScore:   0,
+		Valid:     true,
+		Warnings:  make([]string, 0),
+		RiskScore: 0,
 	}
 
 	if err := tv.validateBasicStructure(tx); err != nil {
@@ -259,7 +259,7 @@ func (tv *TransactionValidator) validateSignature(tx *types.Transaction, chainID
 	}
 
 	txHash := tx.Hash[:]
-	
+
 	err := tv.km.VerifySignature(tx.PublicKey, txHash, tx.Signature, tx.Nonce, chainID)
 	if err != nil {
 		return fmt.Errorf("signature verification failed: %w", err)
@@ -293,7 +293,7 @@ func (tv *TransactionValidator) validateBalance(tx *types.Transaction) error {
 
 	amount := tx.Amount
 	fee := tx.FeeDNT
-	
+
 	totalRequired := new(big.Int).Add(amount, fee)
 
 	if balance.Cmp(totalRequired) < 0 {
@@ -320,12 +320,12 @@ func (tv *TransactionValidator) validateAmount(tx *types.Transaction) error {
 
 func (tv *TransactionValidator) validateVelocity(tx *types.Transaction) error {
 	amount := tx.Amount
-	
+
 	dailyTotal := tv.velocityTracker.GetDailyVolume(tx.From)
 	newTotal := new(big.Int).Add(dailyTotal, amount)
 
 	maxVelocity := new(big.Int).SetUint64(MaxDailyVelocity)
-	
+
 	if newTotal.Cmp(maxVelocity) > 0 {
 		return ErrVelocityLimitExceeded
 	}
@@ -336,7 +336,7 @@ func (tv *TransactionValidator) validateVelocity(tx *types.Transaction) error {
 func (tv *TransactionValidator) requiresMultiSig(tx *types.Transaction) bool {
 	amount := tx.Amount
 	threshold := new(big.Int).SetInt64(VeryHighValueThreshold)
-	
+
 	return amount.Cmp(threshold) >= 0
 }
 
@@ -353,7 +353,7 @@ func (tv *TransactionValidator) calculateRiskScore(tx *types.Transaction) int {
 	score := 0
 
 	amount := tx.Amount
-	
+
 	if amount.Cmp(big.NewInt(HighValueThreshold)) > 0 {
 		score += 20
 	}
@@ -381,14 +381,14 @@ func (tv *TransactionValidator) calculateRiskScore(tx *types.Transaction) int {
 
 func (tv *TransactionValidator) estimateGas(tx *types.Transaction) uint64 {
 	baseGas := uint64(21000)
-	
+
 	// Estimate data gas (if tx has Data field)
 	dataGas := uint64(0)
-	
+
 	if tx.MultiSig != nil {
 		baseGas += 50000
 	}
-	
+
 	return baseGas + dataGas
 }
 
@@ -429,7 +429,7 @@ func (vt *VelocityTracker) AddTransaction(address string, amount *big.Int) {
 
 func (vt *VelocityTracker) cleanupOldEntries() {
 	cutoff := time.Now().AddDate(0, 0, -7)
-	
+
 	for key, vol := range vt.dailyVolumes {
 		if vol.Date.Before(cutoff) {
 			delete(vt.dailyVolumes, key)

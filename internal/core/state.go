@@ -85,10 +85,10 @@ func (a *AccountState) Copy() *AccountState {
 }
 
 type WALEntry struct {
-	BlockHeight uint64                    `json:"block_height"`
-	BlockHash   string                    `json:"block_hash"`
-	Accounts    map[string]AccountState   `json:"accounts"`
-	Timestamp   int64                     `json:"timestamp"`
+	BlockHeight uint64                  `json:"block_height"`
+	BlockHash   string                  `json:"block_hash"`
+	Accounts    map[string]AccountState `json:"accounts"`
+	Timestamp   int64                   `json:"timestamp"`
 }
 
 type Checkpoint struct {
@@ -98,13 +98,13 @@ type Checkpoint struct {
 }
 
 type StateDB struct {
-	db     *badger.DB
-	logger *zap.Logger
-	stateMu sync.RWMutex
-	cache map[string]*AccountState
-	dirty map[string]*AccountState
-	checkpoints []map[string]*AccountState
-	merkleTree *StateMerkleTree
+	db            *badger.DB
+	logger        *zap.Logger
+	stateMu       sync.RWMutex
+	cache         map[string]*AccountState
+	dirty         map[string]*AccountState
+	checkpoints   []map[string]*AccountState
+	merkleTree    *StateMerkleTree
 	commitMu      sync.Mutex
 	dirtyAccounts map[string]bool
 	walPath       string

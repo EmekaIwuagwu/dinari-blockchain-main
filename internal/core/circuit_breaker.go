@@ -12,14 +12,14 @@ import (
 )
 
 const (
-	DefaultThresholdFailureRate    = 0.5 // 50% failure rate
-	DefaultThresholdVolume         = 100
-	DefaultThresholdHighValue      = 10 // 10 high-value tx per minute
-	DefaultSuspiciousPatternScore  = 80
-	DefaultMonitoringWindow        = 1 * time.Minute
-	DefaultCooldownPeriod          = 5 * time.Minute
-	MaxConsecutiveFailures         = 10
-	MaxTransactionsPerSecond       = 1000
+	DefaultThresholdFailureRate   = 0.5 // 50% failure rate
+	DefaultThresholdVolume        = 100
+	DefaultThresholdHighValue     = 10 // 10 high-value tx per minute
+	DefaultSuspiciousPatternScore = 80
+	DefaultMonitoringWindow       = 1 * time.Minute
+	DefaultCooldownPeriod         = 5 * time.Minute
+	MaxConsecutiveFailures        = 10
+	MaxTransactionsPerSecond      = 1000
 )
 
 type CircuitState int
@@ -44,65 +44,65 @@ func (s CircuitState) String() string {
 }
 
 var (
-	ErrCircuitOpen        = errors.New("circuit breaker is open - system in emergency mode")
-	ErrAttackDetected     = errors.New("potential attack detected")
-	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
-	ErrAnomalyDetected    = errors.New("anomaly detected in transaction pattern")
+	ErrCircuitOpen       = errors.New("circuit breaker is open - system in emergency mode")
+	ErrAttackDetected    = errors.New("potential attack detected")
+	ErrRateLimitExceeded = errors.New("rate limit exceeded")
+	ErrAnomalyDetected   = errors.New("anomaly detected in transaction pattern")
 )
 
 type CircuitBreaker struct {
-	state                CircuitState
-	consecutiveFailures  int
-	successCount         int
-	failureCount         int
-	lastStateChange      time.Time
-	lastFailureTime      time.Time
-	anomalyDetector      *AnomalyDetector
+	state               CircuitState
+	consecutiveFailures int
+	successCount        int
+	failureCount        int
+	lastStateChange     time.Time
+	lastFailureTime     time.Time
+	anomalyDetector     *AnomalyDetector
 	rateLimiter         *RateLimiter
-	alertManager         *AlertManager
-	config               *CircuitBreakerConfig
-	metrics              *CircuitMetrics
-	mu                   sync.RWMutex
+	alertManager        *AlertManager
+	config              *CircuitBreakerConfig
+	metrics             *CircuitMetrics
+	mu                  sync.RWMutex
 }
 
 type CircuitBreakerConfig struct {
-	FailureRateThreshold      float64
-	VolumeThreshold           int
-	HighValueTxThreshold      int
-	MonitoringWindow          time.Duration
-	CooldownPeriod            time.Duration
-	HalfOpenMaxRequests       int
-	EnableAnomalyDetection    bool
-	EnableRateLimiting        bool
-	AutoRecovery              bool
+	FailureRateThreshold   float64
+	VolumeThreshold        int
+	HighValueTxThreshold   int
+	MonitoringWindow       time.Duration
+	CooldownPeriod         time.Duration
+	HalfOpenMaxRequests    int
+	EnableAnomalyDetection bool
+	EnableRateLimiting     bool
+	AutoRecovery           bool
 }
 
 type CircuitMetrics struct {
-	TotalRequests        uint64
-	TotalFailures        uint64
-	TotalSuccesses       uint64
-	CircuitOpenCount     uint64
-	LastCircuitOpenTime  time.Time
-	AnomaliesDetected    uint64
-	AttacksPrevented     uint64
-	EmergencyStops       uint64
-	mu                   sync.RWMutex
+	TotalRequests       uint64
+	TotalFailures       uint64
+	TotalSuccesses      uint64
+	CircuitOpenCount    uint64
+	LastCircuitOpenTime time.Time
+	AnomaliesDetected   uint64
+	AttacksPrevented    uint64
+	EmergencyStops      uint64
+	mu                  sync.RWMutex
 }
 
 type AnomalyDetector struct {
-	recentTransactions   []TransactionMetadata
-	patternScores        map[string]int
-	suspiciousAddresses  map[string]SuspiciousActivity
-	mu                   sync.RWMutex
+	recentTransactions  []TransactionMetadata
+	patternScores       map[string]int
+	suspiciousAddresses map[string]SuspiciousActivity
+	mu                  sync.RWMutex
 }
 
 type TransactionMetadata struct {
-	Timestamp    time.Time
-	From         string
-	To           string
-	Amount       *big.Int
-	Success      bool
-	RiskScore    int
+	Timestamp time.Time
+	From      string
+	To        string
+	Amount    *big.Int
+	Success   bool
+	RiskScore int
 }
 
 type SuspiciousActivity struct {
@@ -115,28 +115,28 @@ type SuspiciousActivity struct {
 }
 
 type RateLimiter struct {
-	requestCounts    map[string]*RequestWindow
-	globalCount      *RequestWindow
-	mu               sync.RWMutex
+	requestCounts map[string]*RequestWindow
+	globalCount   *RequestWindow
+	mu            sync.RWMutex
 }
 
 type RequestWindow struct {
-	Count      int
+	Count       int
 	WindowStart time.Time
 }
 
 type AlertManager struct {
-	alerts       []Alert
-	subscribers  []AlertSubscriber
-	mu           sync.RWMutex
+	alerts      []Alert
+	subscribers []AlertSubscriber
+	mu          sync.RWMutex
 }
 
 type Alert struct {
-	Timestamp   time.Time
-	Severity    string
-	Type        string
-	Message     string
-	Details     map[string]interface{}
+	Timestamp time.Time
+	Severity  string
+	Type      string
+	Message   string
+	Details   map[string]interface{}
 }
 
 type AlertSubscriber func(Alert)
@@ -159,15 +159,15 @@ func NewCircuitBreaker(config *CircuitBreakerConfig) *CircuitBreaker {
 
 func DefaultCircuitBreakerConfig() *CircuitBreakerConfig {
 	return &CircuitBreakerConfig{
-		FailureRateThreshold:    DefaultThresholdFailureRate,
-		VolumeThreshold:         DefaultThresholdVolume,
-		HighValueTxThreshold:    DefaultThresholdHighValue,
-		MonitoringWindow:        DefaultMonitoringWindow,
-		CooldownPeriod:          DefaultCooldownPeriod,
-		HalfOpenMaxRequests:     10,
-		EnableAnomalyDetection:  true,
-		EnableRateLimiting:      true,
-		AutoRecovery:            true,
+		FailureRateThreshold:   DefaultThresholdFailureRate,
+		VolumeThreshold:        DefaultThresholdVolume,
+		HighValueTxThreshold:   DefaultThresholdHighValue,
+		MonitoringWindow:       DefaultMonitoringWindow,
+		CooldownPeriod:         DefaultCooldownPeriod,
+		HalfOpenMaxRequests:    10,
+		EnableAnomalyDetection: true,
+		EnableRateLimiting:     true,
+		AutoRecovery:           true,
 	}
 }
 
@@ -284,14 +284,14 @@ func (cb *CircuitBreaker) RecordTransaction(txMeta TransactionMetadata) error {
 				Type:      "ANOMALY_DETECTED",
 				Message:   fmt.Sprintf("Suspicious transaction pattern detected (score: %d)", anomalyScore),
 				Details: map[string]interface{}{
-					"from":       txMeta.From,
-					"to":         txMeta.To,
-					"amount":     txMeta.Amount.String(),
-					"riskScore":  txMeta.RiskScore,
+					"from":         txMeta.From,
+					"to":           txMeta.To,
+					"amount":       txMeta.Amount.String(),
+					"riskScore":    txMeta.RiskScore,
 					"anomalyScore": anomalyScore,
 				},
 			})
-			
+
 			if anomalyScore > 95 {
 				cb.metrics.AttacksPrevented++
 				cb.transitionToOpen()
@@ -352,9 +352,9 @@ func (cb *CircuitBreaker) transitionToOpen() {
 		Type:      "CIRCUIT_OPENED",
 		Message:   "Circuit breaker has been opened - system entering emergency mode",
 		Details: map[string]interface{}{
-			"failureRate":      float64(cb.failureCount) / float64(cb.successCount + cb.failureCount),
+			"failureRate":         float64(cb.failureCount) / float64(cb.successCount+cb.failureCount),
 			"consecutiveFailures": cb.consecutiveFailures,
-			"totalFailures":    cb.metrics.TotalFailures,
+			"totalFailures":       cb.metrics.TotalFailures,
 		},
 	})
 }
@@ -396,7 +396,7 @@ func (cb *CircuitBreaker) ManualOpen(reason string) {
 	defer cb.mu.Unlock()
 
 	cb.transitionToOpen()
-	
+
 	cb.alertManager.SendAlert(Alert{
 		Timestamp: time.Now(),
 		Severity:  "CRITICAL",
@@ -413,7 +413,7 @@ func (cb *CircuitBreaker) ManualClose() {
 	defer cb.mu.Unlock()
 
 	cb.transitionToClosed()
-	
+
 	cb.alertManager.SendAlert(Alert{
 		Timestamp: time.Now(),
 		Severity:  "INFO",
