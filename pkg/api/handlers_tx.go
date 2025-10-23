@@ -123,8 +123,19 @@ func (s *Server) handleTxSend(params json.RawMessage) (interface{}, *RPCError) {
 		return nil, &RPCError{Code: -32003, Message: "transaction rejected: " + err.Error()}
 	}
 
+	// Return full transaction details
 	return map[string]interface{}{
-		"txHash": "0x" + hex.EncodeToString(tx.Hash[:]),
+		"tx": map[string]interface{}{
+			"hash":      "0x" + hex.EncodeToString(tx.Hash[:]),
+			"from":      tx.From,
+			"to":        tx.To,
+			"amount":    tx.Amount.String(),
+			"tokenType": tx.TokenType,
+			"fee":       tx.FeeDNT.String(),
+			"nonce":     tx.Nonce,
+			"timestamp": tx.Timestamp,
+			"status":    "pending",
+		},
 	}, nil
 }
 
@@ -304,10 +315,10 @@ func (s *Server) handleTxGetHistory(params json.RawMessage) (interface{}, *RPCEr
 	result := allTxs[:limit]
 
 	return map[string]interface{}{
-		"transactions": result,
-		"total":        len(allTxs),
-		"returned":     limit,
-		"address":      req.Address,
+		"transactions":  result,
+		"total":         len(allTxs),
+		"returned":      limit,
+		"address":       req.Address,
 		"blocksScanned": height - startHeight,
 	}, nil
 }

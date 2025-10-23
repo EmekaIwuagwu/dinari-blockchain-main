@@ -17,8 +17,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/EmekaIwuagwu/dinari-blockchain/internal/core"
 	"github.com/EmekaIwuagwu/dinari-blockchain/internal/consensus"
+	"github.com/EmekaIwuagwu/dinari-blockchain/internal/core"
 	"github.com/EmekaIwuagwu/dinari-blockchain/internal/mempool"
 	"github.com/EmekaIwuagwu/dinari-blockchain/internal/miner"
 	"github.com/EmekaIwuagwu/dinari-blockchain/internal/p2p"
@@ -44,9 +44,9 @@ const (
 	defaultLogLevel    = "info"
 
 	// 🔥 PRODUCTION: Increased shutdown timeout for proper cleanup
-	defaultShutdownTimeout  = 60 * time.Second // Was 30s, now 60s
-	healthCheckInterval     = 10 * time.Second
-	
+	defaultShutdownTimeout = 60 * time.Second // Was 30s, now 60s
+	healthCheckInterval    = 10 * time.Second
+
 	// 🔥 NEW: Database operation timeouts
 	dbShutdownTimeout       = 45 * time.Second
 	stateCommitTimeout      = 30 * time.Second
@@ -78,7 +78,7 @@ var (
 	pprofAddr   string
 
 	showVersion bool
-	
+
 	// 🔥 NEW: Recovery and validation flags
 	skipRecovery    bool
 	forceRebuild    bool
@@ -106,7 +106,7 @@ func init() {
 	flag.StringVar(&pprofAddr, "pprof-addr", ":6060", "Pprof server address")
 
 	flag.BoolVar(&showVersion, "version", false, "Show version information")
-	
+
 	// 🔥 NEW: Recovery and validation flags
 	flag.BoolVar(&skipRecovery, "skip-recovery", false, "Skip WAL recovery on startup (DANGEROUS)")
 	flag.BoolVar(&forceRebuild, "force-rebuild", false, "Force rebuild state from genesis (DESTRUCTIVE)")
@@ -298,7 +298,7 @@ func validateConfiguration(logger *zap.Logger) error {
 	if devMode {
 		logger.Warn("⚠️  DEVELOPMENT MODE ENABLED - NOT FOR PRODUCTION USE")
 	}
-	
+
 	if skipRecovery {
 		logger.Warn("⚠️  WAL RECOVERY DISABLED - DATA LOSS POSSIBLE ON CRASH")
 	}
@@ -370,32 +370,32 @@ func handleWalletCreation(logger *zap.Logger) error {
 func confirmForceRebuild(logger *zap.Logger) error {
 	logger.Warn("This will DELETE ALL blockchain data and rebuild from genesis")
 	logger.Warn("Type 'DELETE ALL DATA' to confirm:")
-	
+
 	var confirmation string
 	fmt.Scanln(&confirmation)
-	
+
 	if confirmation != "DELETE ALL DATA" {
 		return errors.New("rebuild cancelled")
 	}
-	
+
 	return nil
 }
 
 func rebuildFromGenesis(logger *zap.Logger) error {
 	logger.Warn("Starting force rebuild from genesis...")
-	
+
 	// Delete chaindata
 	chaindataPath := filepath.Join(dataDir, "chaindata")
 	if err := os.RemoveAll(chaindataPath); err != nil {
 		return fmt.Errorf("failed to remove chaindata: %w", err)
 	}
-	
+
 	// Delete WAL
 	walPath := filepath.Join(dataDir, "wal")
 	if err := os.RemoveAll(walPath); err != nil {
 		return fmt.Errorf("failed to remove WAL: %w", err)
 	}
-	
+
 	// Recreate directories
 	if err := os.MkdirAll(chaindataPath, 0700); err != nil {
 		return fmt.Errorf("failed to recreate chaindata: %w", err)
@@ -403,7 +403,7 @@ func rebuildFromGenesis(logger *zap.Logger) error {
 	if err := os.MkdirAll(walPath, 0700); err != nil {
 		return fmt.Errorf("failed to recreate WAL: %w", err)
 	}
-	
+
 	logger.Info("✅ Rebuild complete - starting from genesis")
 	return nil
 }
@@ -429,7 +429,7 @@ type Node struct {
 	monitor        *monitoring.AlertingSystem
 
 	shutdownChan chan struct{}
-	
+
 	// 🔥 NEW: Shutdown coordination
 	shutdownComplete chan error
 	isShuttingDown   bool
@@ -490,7 +490,7 @@ func runNode(ctx context.Context, logger *zap.Logger) int {
 	for {
 		select {
 		case sig := <-signalChan:
-			logger.Info("📥 Received shutdown signal", 
+			logger.Info("📥 Received shutdown signal",
 				zap.String("signal", sig.String()))
 
 			shutdownCtx, shutdownCancel := context.WithTimeout(
@@ -534,13 +534,13 @@ func initializeNode(ctx context.Context, logger *zap.Logger, config *Config) (*N
 	// 🔥 STEP 1: Initialize database with proper configuration
 	logger.Info("📊 Initializing database", zap.String("path", config.DataDir))
 	dbConfig := storage.DefaultConfig(filepath.Join(config.DataDir, "chaindata"))
-	
+
 	// 🔥 PRODUCTION: Enhanced database configuration
 	dbConfig.GCEnabled = true
 	dbConfig.GCInterval = 10 * time.Minute
 	dbConfig.CompactionEnabled = true
 	dbConfig.CompactionInterval = 1 * time.Hour
-	
+
 	db, err := storage.NewDB(dbConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize database: %w", err)
@@ -561,10 +561,10 @@ func initializeNode(ctx context.Context, logger *zap.Logger, config *Config) (*N
 	if !skipRecovery {
 		logger.Info("🔄 Checking for WAL recovery...")
 		walPath := filepath.Join(config.DataDir, "wal")
-		
+
 		recoveryCtx, recoveryCancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer recoveryCancel()
-		
+
 		if err := stateDB.RecoverFromWAL(recoveryCtx, walPath); err != nil {
 			logger.Error("❌ WAL recovery failed", zap.Error(err))
 			return nil, fmt.Errorf("WAL recovery failed: %w", err)
@@ -579,7 +579,7 @@ func initializeNode(ctx context.Context, logger *zap.Logger, config *Config) (*N
 		logger.Info("🔍 Validating database integrity...")
 		validationCtx, validationCancel := context.WithTimeout(ctx, dbIntegrityCheckTimeout)
 		defer validationCancel()
-		
+
 		if err := validateDatabaseIntegrity(validationCtx, stateDB, logger); err != nil {
 			logger.Error("❌ Database validation failed", zap.Error(err))
 			return nil, fmt.Errorf("database validation failed: %w", err)
@@ -594,10 +594,10 @@ func initializeNode(ctx context.Context, logger *zap.Logger, config *Config) (*N
 		return nil, fmt.Errorf("failed to initialize blockchain: %w", err)
 	}
 	node.blockchain = blockchain
-	
+
 	// Log current height
 	height := blockchain.GetHeight()
-	logger.Info("✅ Blockchain initialized", 
+	logger.Info("✅ Blockchain initialized",
 		zap.Uint64("current_height", height))
 
 	// STEP 6: Initialize mempool
@@ -648,14 +648,14 @@ func initializeNode(ctx context.Context, logger *zap.Logger, config *Config) (*N
 		RequestTimeout:     30 * time.Second,
 		ReadTimeout:        15 * time.Second,
 		WriteTimeout:       30 * time.Second,
-		MaxRequestSize:     1 << 20, // 1MB
+		MaxRequestSize:     1 << 20,        // 1MB
 		CORSEnabled:        config.DevMode, // Only in dev mode
 		CORSAllowedOrigins: []string{"*"},
 		AuthEnabled:        !config.DevMode, // Enable in production
 		RateLimitEnabled:   !config.DevMode, // Enable in production
 		LogRequests:        true,
 	}
-	
+
 	rpcServer, err := api.NewServer(rpcConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize RPC server: %w", err)
@@ -687,27 +687,27 @@ func initializeNode(ctx context.Context, logger *zap.Logger, config *Config) (*N
 	// STEP 11: Initialize miner (if enabled)
 	if config.EnableMining {
 		logger.Info("⛏️  Initializing PRODUCTION mining subsystem")
-		
+
 		mempoolAdapter := mempool.NewMempoolAdapter(mempoolInst)
-		
+
 		numThreads := runtime.NumCPU()
 		if numThreads > 1 {
 			numThreads-- // Reserve one CPU for system operations
 		}
-		
+
 		logger.Info("🚀 Starting miner with optimal configuration",
 			zap.String("miner_address", config.MinerAddr),
 			zap.Int("threads", numThreads),
 			zap.String("block_interval", "15 seconds"),
 		)
-		
+
 		minerInst := miner.NewMiner(
 			blockchain,
 			mempoolAdapter,
 			consensusEngine,
 			config.MinerAddr,
 		)
-		
+
 		node.minerService = minerInst
 		logger.Info("✅ PRODUCTION miner initialized")
 	} else {
@@ -743,24 +743,24 @@ func initializeNode(ctx context.Context, logger *zap.Logger, config *Config) (*N
 // 🔥 NEW: Database integrity validation
 func validateDatabaseIntegrity(ctx context.Context, stateDB *core.StateDB, logger *zap.Logger) error {
 	logger.Info("Running database integrity checks...")
-	
+
 	// Check checkpoint
 	checkpoint, err := stateDB.GetLatestCheckpoint()
 	if err != nil {
 		return fmt.Errorf("failed to read checkpoint: %w", err)
 	}
-	
+
 	if checkpoint == nil {
 		logger.Info("No checkpoint found - assuming genesis state")
 		return nil
 	}
-	
+
 	logger.Info("Found checkpoint",
 		zap.Uint64("height", checkpoint.Height),
 		zap.String("hash", checkpoint.Hash),
 		zap.Time("timestamp", checkpoint.Timestamp),
 	)
-	
+
 	// Sample accounts
 	accounts, err := stateDB.GetSampleAccounts(10)
 	if err != nil {
@@ -768,7 +768,7 @@ func validateDatabaseIntegrity(ctx context.Context, stateDB *core.StateDB, logge
 	} else {
 		logger.Info("Account sampling successful", zap.Int("count", len(accounts)))
 	}
-	
+
 	logger.Info("✅ Database integrity validation passed")
 	return nil
 }
@@ -779,7 +779,7 @@ func (n *Node) Start(ctx context.Context) error {
 	// Start metrics server first for health monitoring
 	if n.metricsServer != nil {
 		go func() {
-			n.logger.Info("Starting metrics server", 
+			n.logger.Info("Starting metrics server",
 				zap.String("address", n.config.MetricsAddr))
 			if err := n.metricsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				n.logger.Error("❌ Metrics server error", zap.Error(err))
@@ -791,7 +791,7 @@ func (n *Node) Start(ctx context.Context) error {
 	// Start RPC server
 	if n.rpcServer != nil {
 		go func() {
-			n.logger.Info("Starting RPC server", 
+			n.logger.Info("Starting RPC server",
 				zap.String("address", n.config.RPCAddr))
 			if err := n.rpcServer.Start(); err != nil {
 				n.logger.Error("❌ RPC server failed to start", zap.Error(err))
@@ -898,8 +898,7 @@ func (n *Node) Shutdown(ctx context.Context) error {
 		}
 	}
 
-
-// 🔥 STEP 6: Stop monitoring and metrics
+	// 🔥 STEP 6: Stop monitoring and metrics
 	n.logger.Info("Step 6/8: Stopping monitoring services")
 	if n.metricsServer != nil {
 		metricsCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -968,7 +967,7 @@ func (n *Node) commitFinalState(ctx context.Context) error {
 	n.logger.Info("Flushing final state to disk...")
 
 	height := n.blockchain.GetHeight()
-	
+
 	block, err := n.blockchain.GetBlockByHeight(height)
 	if err != nil {
 		return fmt.Errorf("failed to get latest block: %w", err)
@@ -1009,17 +1008,17 @@ func (n *Node) HealthCheck() error {
 	if n.blockchain == nil {
 		return errors.New("blockchain not initialized")
 	}
-	
+
 	// Check state database
 	if n.stateDB == nil {
 		return errors.New("state database not initialized")
 	}
-	
+
 	// Check storage
 	if n.storage == nil {
 		return errors.New("storage not initialized")
 	}
-	
+
 	// Check P2P (warn only, not critical)
 	if n.p2pNode != nil {
 		peers := n.p2pNode.GetPeers()
@@ -1027,15 +1026,15 @@ func (n *Node) HealthCheck() error {
 			n.logger.Debug("No peers connected (not critical)")
 		}
 	}
-	
+
 	// Check mempool
 	if n.mempool == nil {
 		return errors.New("mempool not initialized")
 	}
-	
+
 	// Check if we can read from blockchain
 	_ = n.blockchain.GetHeight()
-	
+
 	return nil
 }
 
@@ -1063,9 +1062,9 @@ func (n *Node) setupMetricsServer() error {
 			fmt.Fprint(w, `{"status":"not_ready","reason":"blockchain not initialized"}`)
 			return
 		}
-		
+
 		height := n.blockchain.GetHeight()
-		
+
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, `{"status":"ready","height":%d}`, height)
 	})
@@ -1074,7 +1073,7 @@ func (n *Node) setupMetricsServer() error {
 	mux.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
 		height := n.blockchain.GetHeight()
 		peerCount := len(n.p2pNode.GetPeers())
-		
+
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, `{
 			"version":"%s",
