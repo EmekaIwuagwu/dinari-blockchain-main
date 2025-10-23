@@ -4,7 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"strings"
-	
+
 	"github.com/EmekaIwuagwu/dinari-blockchain/internal/core"
 )
 
@@ -93,7 +93,7 @@ func formatBlock(block *core.Block) map[string]interface{} {
 		"prevHash":     "0x" + hex.EncodeToString(block.Header.PrevBlockHash),
 		"merkleRoot":   "0x" + hex.EncodeToString(block.Header.MerkleRoot),
 		"stateRoot":    "0x" + hex.EncodeToString(block.Header.StateRoot),
-		"miner":        minerAddr,  // FIXED: Use derived miner address
+		"miner":        minerAddr, // FIXED: Use derived miner address
 		"transactions": txs,
 		"txCount":      len(block.Transactions),
 	}

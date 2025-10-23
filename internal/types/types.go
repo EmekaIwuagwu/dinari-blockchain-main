@@ -16,11 +16,11 @@ import (
 
 // MultiSigData contains multi-signature transaction data
 type MultiSigData struct {
-	RequiredSignatures int                  `json:"required_signatures"`
-	TotalParticipants  int                  `json:"total_participants"`
-	Participants       []string             `json:"participants"` // Public key hashes
-	Signatures         []MultiSigSignature  `json:"signatures"`
-	Threshold          *big.Int             `json:"threshold"` // Amount threshold requiring multi-sig
+	RequiredSignatures int                 `json:"required_signatures"`
+	TotalParticipants  int                 `json:"total_participants"`
+	Participants       []string            `json:"participants"` // Public key hashes
+	Signatures         []MultiSigSignature `json:"signatures"`
+	Threshold          *big.Int            `json:"threshold"` // Amount threshold requiring multi-sig
 }
 
 // MultiSigSignature represents a single signature in a multi-sig transaction
@@ -117,20 +117,20 @@ func (msd *MultiSigData) AddSignature(pubKey []byte, signature []byte, timestamp
 	if len(msd.Signatures) >= msd.TotalParticipants {
 		return ErrInvalidTransaction
 	}
-	
+
 	// Check if this participant already signed
 	for _, sig := range msd.Signatures {
 		if string(sig.PublicKey) == string(pubKey) {
 			return ErrInvalidTransaction // Already signed
 		}
 	}
-	
+
 	msd.Signatures = append(msd.Signatures, MultiSigSignature{
 		PublicKey: pubKey,
 		Signature: signature,
 		Timestamp: timestamp,
 	})
-	
+
 	return nil
 }
 
@@ -173,11 +173,11 @@ func (msd *MultiSigData) UnmarshalJSON(data []byte) error {
 	}{
 		Alias: (*Alias)(msd),
 	}
-	
+
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
-	
+
 	if aux.Threshold != "" {
 		threshold, ok := new(big.Int).SetString(aux.Threshold, 10)
 		if !ok {
@@ -185,7 +185,7 @@ func (msd *MultiSigData) UnmarshalJSON(data []byte) error {
 		}
 		msd.Threshold = threshold
 	}
-	
+
 	return nil
 }
 
@@ -195,12 +195,12 @@ func (msd *MultiSigData) UnmarshalJSON(data []byte) error {
 
 // SecurityContext holds security-related metadata for transactions
 type SecurityContext struct {
-	RiskScore       float64 `json:"risk_score"`        // 0.0 - 1.0
-	VelocityCheck   bool    `json:"velocity_check"`    // Passed velocity limits
-	BlacklistCheck  bool    `json:"blacklist_check"`   // Not on blacklist
-	DoubleSpendCheck bool   `json:"double_spend_check"` // No double-spend detected
-	CircuitBreakerOK bool   `json:"circuit_breaker_ok"` // Circuit breaker allows
-	RequiresMultiSig bool   `json:"requires_multisig"`  // Needs multi-sig
+	RiskScore        float64 `json:"risk_score"`         // 0.0 - 1.0
+	VelocityCheck    bool    `json:"velocity_check"`     // Passed velocity limits
+	BlacklistCheck   bool    `json:"blacklist_check"`    // Not on blacklist
+	DoubleSpendCheck bool    `json:"double_spend_check"` // No double-spend detected
+	CircuitBreakerOK bool    `json:"circuit_breaker_ok"` // Circuit breaker allows
+	RequiresMultiSig bool    `json:"requires_multisig"`  // Needs multi-sig
 }
 
 // IsSafe checks if all security checks passed
@@ -225,10 +225,10 @@ type KeyPair struct {
 
 // WalletConfig holds wallet security configuration
 type WalletConfig struct {
-	UseHSM            bool   `json:"use_hsm"`
-	MultiSigEnabled   bool   `json:"multisig_enabled"`
-	RequiredSignatures int   `json:"required_signatures"`
-	KeyDerivationPath string `json:"key_derivation_path"`
+	UseHSM             bool   `json:"use_hsm"`
+	MultiSigEnabled    bool   `json:"multisig_enabled"`
+	RequiredSignatures int    `json:"required_signatures"`
+	KeyDerivationPath  string `json:"key_derivation_path"`
 }
 
 // ============================================================================
@@ -239,9 +239,9 @@ type WalletConfig struct {
 type CircuitBreakerState int
 
 const (
-	CircuitClosed CircuitBreakerState = iota // Normal operation
-	CircuitOpen                               // Emergency stop
-	CircuitHalfOpen                           // Testing recovery
+	CircuitClosed   CircuitBreakerState = iota // Normal operation
+	CircuitOpen                                // Emergency stop
+	CircuitHalfOpen                            // Testing recovery
 )
 
 func (cbs CircuitBreakerState) String() string {
@@ -263,12 +263,12 @@ func (cbs CircuitBreakerState) String() string {
 
 // HSMConfig holds Hardware Security Module configuration
 type HSMConfig struct {
-	Enabled      bool   `json:"enabled"`
-	Provider     string `json:"provider"` // "aws-cloudhsm", "azure-keyvault", "software"
-	KeyID        string `json:"key_id"`
-	Region       string `json:"region,omitempty"`
-	VaultName    string `json:"vault_name,omitempty"`
-	Endpoint     string `json:"endpoint,omitempty"`
+	Enabled   bool   `json:"enabled"`
+	Provider  string `json:"provider"` // "aws-cloudhsm", "azure-keyvault", "software"
+	KeyID     string `json:"key_id"`
+	Region    string `json:"region,omitempty"`
+	VaultName string `json:"vault_name,omitempty"`
+	Endpoint  string `json:"endpoint,omitempty"`
 }
 
 // ============================================================================
@@ -277,14 +277,14 @@ type HSMConfig struct {
 
 // AuditLogEntry records security-relevant events
 type AuditLogEntry struct {
-	Timestamp   int64  `json:"timestamp"`
-	EventType   string `json:"event_type"`
-	Severity    string `json:"severity"` // "info", "warning", "critical"
-	Actor       string `json:"actor"`    // Address or system component
-	Action      string `json:"action"`
-	Result      string `json:"result"`   // "success", "failure"
-	Details     string `json:"details"`
-	TxHash      string `json:"tx_hash,omitempty"`
+	Timestamp int64  `json:"timestamp"`
+	EventType string `json:"event_type"`
+	Severity  string `json:"severity"` // "info", "warning", "critical"
+	Actor     string `json:"actor"`    // Address or system component
+	Action    string `json:"action"`
+	Result    string `json:"result"` // "success", "failure"
+	Details   string `json:"details"`
+	TxHash    string `json:"tx_hash,omitempty"`
 }
 
 // ============================================================================
@@ -293,9 +293,9 @@ type AuditLogEntry struct {
 
 // FinalityCheckpoint represents a checkpoint for transaction finality
 type FinalityCheckpoint struct {
-	BlockHeight     uint64 `json:"block_height"`
-	BlockHash       string `json:"block_hash"`
-	Timestamp       int64  `json:"timestamp"`
+	BlockHeight       uint64 `json:"block_height"`
+	BlockHash         string `json:"block_hash"`
+	Timestamp         int64  `json:"timestamp"`
 	ConfirmationDepth uint32 `json:"confirmation_depth"`
-	Finalized       bool   `json:"finalized"`
+	Finalized         bool   `json:"finalized"`
 }

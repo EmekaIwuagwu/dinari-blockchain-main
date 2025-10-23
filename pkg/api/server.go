@@ -14,23 +14,23 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"golang.org/x/time/rate"
 	"go.uber.org/zap"
+	"golang.org/x/time/rate"
 
 	"github.com/EmekaIwuagwu/dinari-blockchain/internal/core"
 	"github.com/EmekaIwuagwu/dinari-blockchain/internal/mempool"
 )
 
 const (
-	MaxRequestSize     = 1 << 20
-	RequestTimeout     = 30 * time.Second
-	ReadTimeout        = 10 * time.Second
-	WriteTimeout       = 10 * time.Second
-	IdleTimeout        = 120 * time.Second
-	ShutdownTimeout    = 30 * time.Second
-	DefaultRateLimit   = 100
-	DefaultRateBurst   = 20
-	JSONRPCVersion     = "2.0"
+	MaxRequestSize   = 1 << 20
+	RequestTimeout   = 30 * time.Second
+	ReadTimeout      = 10 * time.Second
+	WriteTimeout     = 10 * time.Second
+	IdleTimeout      = 120 * time.Second
+	ShutdownTimeout  = 30 * time.Second
+	DefaultRateLimit = 100
+	DefaultRateBurst = 20
+	JSONRPCVersion   = "2.0"
 )
 
 const (
@@ -190,7 +190,7 @@ func (s *Server) SetMempool(mempool *mempool.Mempool) {
 func (s *Server) HandleTxSend(ctx context.Context, params json.RawMessage) (interface{}, error) {
 	result, rpcErr := s.handleTxSend(params)
 	if rpcErr != nil {
-		return nil, fmt.Errorf("%s", rpcErr.Message)  // ✅ Convert to regular error
+		return nil, fmt.Errorf("%s", rpcErr.Message) // ✅ Convert to regular error
 	}
 	return result, nil
 }

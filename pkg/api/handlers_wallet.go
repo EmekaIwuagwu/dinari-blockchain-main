@@ -2,8 +2,8 @@ package api
 
 import (
 	"encoding/json"
-	"go.uber.org/zap"
 	"github.com/EmekaIwuagwu/dinari-blockchain/pkg/crypto"
+	"go.uber.org/zap"
 )
 
 // handleWalletCreate creates a new wallet
@@ -27,13 +27,12 @@ func (s *Server) handleWalletCreate(params json.RawMessage) (interface{}, *RPCEr
 	}
 
 	return map[string]interface{}{
-		"address":        address,
-		"privateKeyHex":  crypto.PrivateKeyToHex(privKey),
-		"privateKeyWIF":  wif,
-		"publicKeyHex":   crypto.PublicKeyToHex(pubKey),
+		"address":       address,
+		"privateKeyHex": crypto.PrivateKeyToHex(privKey),
+		"privateKeyWIF": wif,
+		"publicKeyHex":  crypto.PublicKeyToHex(pubKey),
 	}, nil
 }
-
 
 // handleWalletBalance returns the balance for an address
 // handleWalletBalance returns the balance for an address
@@ -60,7 +59,7 @@ func (s *Server) handleWalletBalance(params json.RawMessage) (interface{}, *RPCE
 		// If account doesn't exist, return zero balance instead of error
 		s.logger.Info("📭 Account not found, returning zero balance",
 			zap.String("address", req.Address))
-		
+
 		return map[string]interface{}{
 			"address":    req.Address,
 			"balanceDNT": "0",

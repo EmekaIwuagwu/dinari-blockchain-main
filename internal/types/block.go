@@ -10,15 +10,15 @@ import (
 
 // BlockHeader contains the metadata of a block
 type BlockHeader struct {
-	Version       uint32   `json:"version"`
-	Height        uint64   `json:"height"`
-	PrevBlockHash []byte   `json:"prevBlockHash"`
-	MerkleRoot    []byte   `json:"merkleRoot"`
-	Timestamp     int64    `json:"timestamp"`
-	Difficulty    uint32   `json:"difficulty"`
-	Nonce         uint64   `json:"nonce"`
-	Hash          []byte   `json:"hash"`
-	StateRoot     []byte   `json:"stateRoot"`
+	Version       uint32 `json:"version"`
+	Height        uint64 `json:"height"`
+	PrevBlockHash []byte `json:"prevBlockHash"`
+	MerkleRoot    []byte `json:"merkleRoot"`
+	Timestamp     int64  `json:"timestamp"`
+	Difficulty    uint32 `json:"difficulty"`
+	Nonce         uint64 `json:"nonce"`
+	Hash          []byte `json:"hash"`
+	StateRoot     []byte `json:"stateRoot"`
 }
 
 // Block represents a complete block in the blockchain
@@ -85,7 +85,7 @@ func ComputeBlockHash(header *BlockHeader) []byte {
 
 	first := sha256.Sum256(buf.Bytes())
 	second := sha256.Sum256(first[:])
-	
+
 	return second[:]
 }
 

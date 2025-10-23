@@ -113,4 +113,4 @@ func (r *Receipt) IsPending() bool {
 func (r *Receipt) String() string {
 	data, _ := json.MarshalIndent(r, "", "  ")
 	return string(data)
-}	
+}

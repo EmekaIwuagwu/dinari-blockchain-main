@@ -14,32 +14,32 @@ import (
 const (
 	// MaxMempoolSize is the maximum number of transactions in mempool
 	MaxMempoolSize = 10000
-	
+
 	// MaxTxSize is the maximum size of a single transaction in bytes
 	MaxTxSize = 100 * 1024 // 100KB
-	
+
 	// TxExpiryTime is how long a transaction stays in mempool
 	TxExpiryTime = 24 * time.Hour
-	
+
 	// MaxTxPerAddress limits transactions per address to prevent spam
 	MaxTxPerAddress = 100
-	
+
 	// MinFeePerByte is the minimum fee per byte (in smallest unit)
 	MinFeePerByte = 1
-	
+
 	// EvictionBatchSize for batch eviction operations
 	EvictionBatchSize = 100
 )
 
 var (
-	ErrMempoolFull         = errors.New("mempool is full")
+	ErrMempoolFull          = errors.New("mempool is full")
 	ErrDuplicateTransaction = errors.New("duplicate transaction")
-	ErrTransactionExpired  = errors.New("transaction expired")
-	ErrInvalidNonce        = errors.New("invalid nonce: must be sequential")
-	ErrFeeTooLow          = errors.New("fee too low")
-	ErrTransactionTooLarge = errors.New("transaction too large")
-	ErrTooManyTxFromAddr   = errors.New("too many pending transactions from address")
-	ErrReplaceByFeeTooLow  = errors.New("replacement fee too low (needs +10%)")
+	ErrTransactionExpired   = errors.New("transaction expired")
+	ErrInvalidNonce         = errors.New("invalid nonce: must be sequential")
+	ErrFeeTooLow            = errors.New("fee too low")
+	ErrTransactionTooLarge  = errors.New("transaction too large")
+	ErrTooManyTxFromAddr    = errors.New("too many pending transactions from address")
+	ErrReplaceByFeeTooLow   = errors.New("replacement fee too low (needs +10%)")
 )
 
 // Transaction represents a mempool transaction
@@ -56,41 +56,41 @@ type Transaction struct {
 	PublicKey []byte
 	Data      []byte
 	Size      int // Transaction size in bytes
-	
+
 	// Mempool metadata
-	AddedAt   time.Time
+	AddedAt    time.Time
 	FeePerByte *big.Int // For priority calculation
 }
 
 // MempoolTx wraps a transaction with mempool-specific data
 type MempoolTx struct {
-	Tx        *Transaction
-	AddedAt   time.Time
-	Priority  *big.Int // Higher is better (fee per byte)
-	Index     int      // Index in priority queue
+	Tx       *Transaction
+	AddedAt  time.Time
+	Priority *big.Int // Higher is better (fee per byte)
+	Index    int      // Index in priority queue
 }
 
 // Mempool manages pending transactions
 type Mempool struct {
 	// Core data structures
-	txByHash    map[string]*MempoolTx          // hash -> tx (O(1) lookup)
+	txByHash    map[string]*MempoolTx            // hash -> tx (O(1) lookup)
 	txByAddress map[string]map[uint64]*MempoolTx // address -> nonce -> tx
-	
+
 	// Priority queue for mining selection
 	priorityQueue *TxPriorityQueue
-	
+
 	// Configuration
 	maxSize         int
 	maxTxPerAddress int
 	minFeePerByte   *big.Int
 	txExpiryTime    time.Duration
-	
+
 	// Statistics
 	stats MempoolStats
-	
+
 	// Thread safety
 	mu sync.RWMutex
-	
+
 	// Eviction
 	lastEviction time.Time
 }
@@ -110,7 +110,7 @@ type MempoolStats struct {
 func NewMempool() *Mempool {
 	pq := make(TxPriorityQueue, 0)
 	heap.Init(&pq)
-	
+
 	return &Mempool{
 		txByHash:        make(map[string]*MempoolTx),
 		txByAddress:     make(map[string]map[uint64]*MempoolTx),
@@ -132,7 +132,7 @@ func (mp *Mempool) AddTransaction(tx *Transaction) error {
 	if tx == nil {
 		return errors.New("transaction cannot be nil")
 	}
-	
+
 	// 2. CRITICAL FIX: Validate transaction size BEFORE any division operations
 	if tx.Size <= 0 {
 		mp.mu.Lock()
@@ -140,23 +140,23 @@ func (mp *Mempool) AddTransaction(tx *Transaction) error {
 		mp.mu.Unlock()
 		return errors.New("transaction size must be greater than zero")
 	}
-	
+
 	if tx.Size > MaxTxSize {
 		mp.mu.Lock()
 		mp.stats.RejectedCount++
 		mp.mu.Unlock()
 		return ErrTransactionTooLarge
 	}
-	
+
 	mp.mu.Lock()
 	defer mp.mu.Unlock()
-	
+
 	// 3. Check for duplicate
 	if _, exists := mp.txByHash[tx.Hash]; exists {
 		mp.stats.RejectedCount++
 		return ErrDuplicateTransaction
 	}
-	
+
 	// 4. Calculate fee per byte (NOW SAFE - tx.Size is guaranteed > 0)
 	feePerByte := new(big.Int).Div(tx.FeeDNT, big.NewInt(int64(tx.Size)))
 	if feePerByte.Cmp(mp.minFeePerByte) < 0 {
@@ -164,7 +164,7 @@ func (mp *Mempool) AddTransaction(tx *Transaction) error {
 		return ErrFeeTooLow
 	}
 	tx.FeePerByte = feePerByte
-	
+
 	// 5. Check address transaction limit
 	addrTxs := mp.txByAddress[tx.From]
 	if len(addrTxs) >= mp.maxTxPerAddress {
@@ -174,7 +174,7 @@ func (mp *Mempool) AddTransaction(tx *Transaction) error {
 			return ErrTooManyTxFromAddr
 		}
 	}
-	
+
 	// 6. Check for Replace-By-Fee (RBF)
 	if existingTx, exists := mp.getTxByNonce(tx.From, tx.Nonce); exists {
 		if err := mp.handleReplaceByFee(existingTx.Tx, tx); err != nil {
@@ -183,7 +183,7 @@ func (mp *Mempool) AddTransaction(tx *Transaction) error {
 		}
 		// RBF successful, old tx already removed
 	}
-	
+
 	// 7. Check if mempool is full
 	if mp.stats.TotalTxs >= mp.maxSize {
 		// Try to evict lowest priority transaction
@@ -192,32 +192,32 @@ func (mp *Mempool) AddTransaction(tx *Transaction) error {
 			return ErrMempoolFull
 		}
 	}
-	
+
 	// 8. Add transaction to mempool
 	mempoolTx := &MempoolTx{
 		Tx:       tx,
 		AddedAt:  time.Now(),
 		Priority: feePerByte,
 	}
-	
+
 	// Add to hash index
 	mp.txByHash[tx.Hash] = mempoolTx
-	
+
 	// Add to address/nonce index
 	if mp.txByAddress[tx.From] == nil {
 		mp.txByAddress[tx.From] = make(map[uint64]*MempoolTx)
 	}
 	mp.txByAddress[tx.From][tx.Nonce] = mempoolTx
-	
+
 	// Add to priority queue
 	heap.Push(mp.priorityQueue, mempoolTx)
-	
+
 	// Update statistics
 	mp.stats.TotalTxs++
 	mp.stats.TotalSize += int64(tx.Size)
 	mp.stats.TxsByAddress[tx.From]++
 	mp.stats.AcceptedCount++
-	
+
 	return nil
 }
 
@@ -225,7 +225,7 @@ func (mp *Mempool) AddTransaction(tx *Transaction) error {
 func (mp *Mempool) RemoveTransaction(txHash string) error {
 	mp.mu.Lock()
 	defer mp.mu.Unlock()
-	
+
 	return mp.removeTransactionUnsafe(txHash)
 }
 
@@ -233,14 +233,14 @@ func (mp *Mempool) RemoveTransaction(txHash string) error {
 func (mp *Mempool) RemoveTransactions(txHashes []string) error {
 	mp.mu.Lock()
 	defer mp.mu.Unlock()
-	
+
 	for _, hash := range txHashes {
 		if err := mp.removeTransactionUnsafe(hash); err != nil {
 			// Log but don't fail entire batch
 			fmt.Printf("Warning: failed to remove tx %s: %v\n", hash, err)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -248,12 +248,12 @@ func (mp *Mempool) RemoveTransactions(txHashes []string) error {
 func (mp *Mempool) GetTransaction(txHash string) (*Transaction, error) {
 	mp.mu.RLock()
 	defer mp.mu.RUnlock()
-	
+
 	mempoolTx, exists := mp.txByHash[txHash]
 	if !exists {
 		return nil, errors.New("transaction not found in mempool")
 	}
-	
+
 	return mempoolTx.Tx, nil
 }
 
@@ -261,14 +261,14 @@ func (mp *Mempool) GetTransaction(txHash string) (*Transaction, error) {
 func (mp *Mempool) GetTransactionsByAddress(address string) []*Transaction {
 	mp.mu.RLock()
 	defer mp.mu.RUnlock()
-	
+
 	txs := make([]*Transaction, 0)
 	if addrTxs, exists := mp.txByAddress[address]; exists {
 		for _, mempoolTx := range addrTxs {
 			txs = append(txs, mempoolTx.Tx)
 		}
 	}
-	
+
 	return txs
 }
 
@@ -276,26 +276,26 @@ func (mp *Mempool) GetTransactionsByAddress(address string) []*Transaction {
 func (mp *Mempool) GetPendingTransactions(limit int) []*Transaction {
 	mp.mu.RLock()
 	defer mp.mu.RUnlock()
-	
+
 	if limit <= 0 || limit > mp.stats.TotalTxs {
 		limit = mp.stats.TotalTxs
 	}
-	
+
 	txs := make([]*Transaction, 0, limit)
-	
+
 	// Get transactions from priority queue (highest fee first)
 	pqCopy := make(TxPriorityQueue, len(*mp.priorityQueue))
 	copy(pqCopy, *mp.priorityQueue)
-	
+
 	for len(txs) < limit && len(pqCopy) > 0 {
 		mempoolTx := heap.Pop(&pqCopy).(*MempoolTx)
-		
+
 		// Validate nonce ordering for this address
 		if mp.isNonceValid(mempoolTx.Tx.From, mempoolTx.Tx.Nonce) {
 			txs = append(txs, mempoolTx.Tx)
 		}
 	}
-	
+
 	return txs
 }
 
@@ -303,12 +303,12 @@ func (mp *Mempool) GetPendingTransactions(limit int) []*Transaction {
 func (mp *Mempool) ValidateNonceSequence(address string, currentNonce uint64) error {
 	mp.mu.RLock()
 	defer mp.mu.RUnlock()
-	
+
 	addrTxs, exists := mp.txByAddress[address]
 	if !exists {
 		return nil // No pending transactions
 	}
-	
+
 	// Check that nonces are sequential starting from currentNonce
 	expectedNonce := currentNonce
 	for {
@@ -317,7 +317,7 @@ func (mp *Mempool) ValidateNonceSequence(address string, currentNonce uint64) er
 		}
 		expectedNonce++
 	}
-	
+
 	// Check for gaps
 	for nonce := range addrTxs {
 		if nonce < currentNonce {
@@ -327,7 +327,7 @@ func (mp *Mempool) ValidateNonceSequence(address string, currentNonce uint64) er
 			return fmt.Errorf("nonce gap detected: expected %d, found %d", expectedNonce, nonce)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -335,10 +335,10 @@ func (mp *Mempool) ValidateNonceSequence(address string, currentNonce uint64) er
 func (mp *Mempool) EvictExpiredTransactions() int {
 	mp.mu.Lock()
 	defer mp.mu.Unlock()
-	
+
 	now := time.Now()
 	evicted := 0
-	
+
 	// Find expired transactions
 	expiredHashes := make([]string, 0)
 	for hash, mempoolTx := range mp.txByHash {
@@ -346,7 +346,7 @@ func (mp *Mempool) EvictExpiredTransactions() int {
 			expiredHashes = append(expiredHashes, hash)
 		}
 	}
-	
+
 	// Remove expired transactions
 	for _, hash := range expiredHashes {
 		if err := mp.removeTransactionUnsafe(hash); err == nil {
@@ -354,9 +354,9 @@ func (mp *Mempool) EvictExpiredTransactions() int {
 			mp.stats.EvictedCount++
 		}
 	}
-	
+
 	mp.lastEviction = now
-	
+
 	return evicted
 }
 
@@ -364,7 +364,7 @@ func (mp *Mempool) EvictExpiredTransactions() int {
 func (mp *Mempool) GetStats() MempoolStats {
 	mp.mu.RLock()
 	defer mp.mu.RUnlock()
-	
+
 	return mp.stats
 }
 
@@ -372,7 +372,7 @@ func (mp *Mempool) GetStats() MempoolStats {
 func (mp *Mempool) Size() int {
 	mp.mu.RLock()
 	defer mp.mu.RUnlock()
-	
+
 	return mp.stats.TotalTxs
 }
 
@@ -380,13 +380,13 @@ func (mp *Mempool) Size() int {
 func (mp *Mempool) Clear() {
 	mp.mu.Lock()
 	defer mp.mu.Unlock()
-	
+
 	mp.txByHash = make(map[string]*MempoolTx)
 	mp.txByAddress = make(map[string]map[uint64]*MempoolTx)
 	pq := make(TxPriorityQueue, 0)
 	mp.priorityQueue = &pq
 	heap.Init(mp.priorityQueue)
-	
+
 	mp.stats = MempoolStats{
 		TxsByAddress:      make(map[string]int),
 		AcceptedCount:     mp.stats.AcceptedCount,
@@ -403,12 +403,12 @@ func (mp *Mempool) removeTransactionUnsafe(txHash string) error {
 	if !exists {
 		return errors.New("transaction not found")
 	}
-	
+
 	tx := mempoolTx.Tx
-	
+
 	// Remove from hash index
 	delete(mp.txByHash, txHash)
-	
+
 	// Remove from address/nonce index
 	if addrTxs, exists := mp.txByAddress[tx.From]; exists {
 		delete(addrTxs, tx.Nonce)
@@ -416,10 +416,10 @@ func (mp *Mempool) removeTransactionUnsafe(txHash string) error {
 			delete(mp.txByAddress, tx.From)
 		}
 	}
-	
+
 	// Remove from priority queue (mark as removed, actual removal happens during heap operations)
 	mempoolTx.Tx = nil // Mark as removed
-	
+
 	// Update statistics
 	mp.stats.TotalTxs--
 	mp.stats.TotalSize -= int64(tx.Size)
@@ -427,7 +427,7 @@ func (mp *Mempool) removeTransactionUnsafe(txHash string) error {
 	if mp.stats.TxsByAddress[tx.From] == 0 {
 		delete(mp.stats.TxsByAddress, tx.From)
 	}
-	
+
 	return nil
 }
 
@@ -444,18 +444,18 @@ func (mp *Mempool) handleReplaceByFee(oldTx, newTx *Transaction) error {
 	// RBF requires at least 10% higher fee
 	minNewFee := new(big.Int).Mul(oldTx.FeeDNT, big.NewInt(110))
 	minNewFee.Div(minNewFee, big.NewInt(100))
-	
+
 	if newTx.FeeDNT.Cmp(minNewFee) < 0 {
 		return ErrReplaceByFeeTooLow
 	}
-	
+
 	// Remove old transaction
 	if err := mp.removeTransactionUnsafe(oldTx.Hash); err != nil {
 		return fmt.Errorf("failed to remove old transaction: %w", err)
 	}
-	
+
 	mp.stats.ReplaceByFeeCount++
-	
+
 	return nil
 }
 
@@ -463,19 +463,19 @@ func (mp *Mempool) evictLowestPriority(minPriority *big.Int) bool {
 	if mp.priorityQueue.Len() == 0 {
 		return false
 	}
-	
+
 	// Peek at lowest priority transaction
 	lowestPriorityTx := (*mp.priorityQueue)[mp.priorityQueue.Len()-1]
-	
+
 	// Only evict if new transaction has higher priority
 	if lowestPriorityTx.Priority.Cmp(minPriority) >= 0 {
 		return false
 	}
-	
+
 	// Remove lowest priority transaction
 	mp.removeTransactionUnsafe(lowestPriorityTx.Tx.Hash)
 	mp.stats.EvictedCount++
-	
+
 	return true
 }
 
@@ -484,26 +484,26 @@ func (mp *Mempool) tryEvictLowFeeTx(address string, newFeePerByte *big.Int) bool
 	if len(addrTxs) == 0 {
 		return false
 	}
-	
+
 	// Find lowest fee transaction from this address
 	var lowestFeeTx *MempoolTx
 	var lowestFee *big.Int
-	
+
 	for _, tx := range addrTxs {
 		if lowestFeeTx == nil || tx.Priority.Cmp(lowestFee) < 0 {
 			lowestFeeTx = tx
 			lowestFee = tx.Priority
 		}
 	}
-	
+
 	// Only evict if new tx has higher fee
 	if lowestFee.Cmp(newFeePerByte) >= 0 {
 		return false
 	}
-	
+
 	mp.removeTransactionUnsafe(lowestFeeTx.Tx.Hash)
 	mp.stats.EvictedCount++
-	
+
 	return true
 }
 
@@ -514,7 +514,7 @@ func (mp *Mempool) isNonceValid(address string, nonce uint64) bool {
 	if len(addrTxs) == 0 {
 		return true
 	}
-	
+
 	// Find lowest nonce for this address
 	minNonce := ^uint64(0)
 	for n := range addrTxs {
@@ -522,14 +522,14 @@ func (mp *Mempool) isNonceValid(address string, nonce uint64) bool {
 			minNonce = n
 		}
 	}
-	
+
 	// Check for gaps
 	for i := minNonce; i < nonce; i++ {
 		if _, exists := addrTxs[i]; !exists {
 			return false // Gap detected
 		}
 	}
-	
+
 	return true
 }
 
