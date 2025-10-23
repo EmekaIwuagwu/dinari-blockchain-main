@@ -641,6 +641,17 @@ func (w *MiningWorker) handleBlockFound(template *BlockTemplate, nonce uint64, h
 	fmt.Printf("   ⏱️  Timestamp: %d\n\n", finalTimestamp)
 
 	w.miner.stopWorkers()
+
+	// 🔥 CRITICAL: Force template refresh after block acceptance
+	// This ensures next block uses fresh state and removes stale transactions
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		if err := w.miner.refreshBlockTemplate(); err != nil {
+			fmt.Printf("⚠️  Post-acceptance template refresh failed: %v\n", err)
+		} else {
+			fmt.Printf("🔄 Template refreshed after block acceptance\n")
+		}
+	}()
 }
 
 // 🔥 NEW: Force template refresh (called on rejection)
@@ -655,7 +666,62 @@ func (m *Miner) forceTemplateRefresh() {
 
 func (m *Miner) selectTransactions(txs []*types.Transaction) ([]*types.Transaction, *big.Int) {
 	totalFees := big.NewInt(0)
-	return txs, totalFees
+	selected := make([]*types.Transaction, 0, len(txs))
+
+	// Track nonces per address to handle multiple transactions from same sender
+	addressNonces := make(map[string]uint64)
+
+	for _, tx := range txs {
+		// Skip coinbase transactions
+		if tx.IsCoinbase() {
+			continue
+		}
+
+		// Get expected nonce for this address
+		expectedNonce, exists := addressNonces[tx.From]
+		if !exists {
+			// First transaction from this address - get nonce from state
+			stateNonce, err := m.blockchain.State.GetNonce(tx.From)
+			if err != nil {
+				// If account doesn't exist, expected nonce is 0
+				expectedNonce = 0
+			} else {
+				expectedNonce = stateNonce
+			}
+			addressNonces[tx.From] = expectedNonce
+		}
+
+		// Validate transaction nonce
+		if tx.Nonce != expectedNonce {
+			fmt.Printf("⚠️  Skipping transaction from %s: invalid nonce (expected %d, got %d)\n",
+				tx.From[:8], expectedNonce, tx.Nonce)
+			continue
+		}
+
+		// Validate transaction has non-zero size
+		if tx.Size() <= 0 {
+			fmt.Printf("⚠️  Skipping transaction from %s: invalid size\n", tx.From[:8])
+			continue
+		}
+
+		// Add transaction to selected list
+		selected = append(selected, tx)
+
+		// Update expected nonce for this address
+		addressNonces[tx.From] = expectedNonce + 1
+
+		// Add fees
+		if tx.FeeDNT != nil && tx.FeeDNT.Sign() > 0 {
+			totalFees.Add(totalFees, tx.FeeDNT)
+		}
+	}
+
+	if len(selected) > 0 {
+		fmt.Printf("📋 Selected %d valid transactions for block (total fees: %s)\n",
+			len(selected), totalFees.String())
+	}
+
+	return selected, totalFees
 }
 
 func (m *Miner) createCoinbaseTransaction(height uint64, reward *big.Int) *types.Transaction {

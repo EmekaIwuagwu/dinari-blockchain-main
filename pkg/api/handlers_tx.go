@@ -91,6 +91,9 @@ func (s *Server) handleTxSend(params json.RawMessage) (interface{}, *RPCError) {
 	}
 	txNonce := currentNonce // Use current nonce, NOT +1!
 
+	fmt.Printf("📤 Creating transaction from %s with nonce %d (state nonce: %d)\n",
+		req.From[:8], txNonce, currentNonce)
+
 	tx := &types.Transaction{
 		From:      req.From,
 		To:        req.To,

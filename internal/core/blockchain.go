@@ -1001,6 +1001,13 @@ func (bc *Blockchain) applyTransaction(tx *types.Transaction) error {
 		return fmt.Errorf("failed to increment nonce from %d to %d: %w", currentNonce, newNonce, err)
 	}
 
+	fromAddr := tx.From
+	if len(fromAddr) > 8 {
+		fromAddr = fromAddr[:8]
+	}
+	fmt.Printf("   ✅ Applied tx from %s: nonce incremented %d → %d\n",
+		fromAddr, currentNonce, newNonce)
+
 	return nil
 }
 
