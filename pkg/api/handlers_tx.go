@@ -82,12 +82,14 @@ func (s *Server) handleTxSend(params json.RawMessage) (interface{}, *RPCError) {
 		return nil, &RPCError{Code: -32602, Message: "private key does not match from address"}
 	}
 
-	// 🔥 NEW: Fetch current nonce and set to current + 1
-	currentNonce, err := s.blockchain.State.GetNonce(req.From) // Or s.state.GetNonce if separate
+	// Fetch current nonce from state
+	// The account nonce represents the NEXT expected transaction nonce
+	// So if account nonce is 0, this transaction should have nonce 0
+	currentNonce, err := s.blockchain.State.GetNonce(req.From)
 	if err != nil {
 		return nil, &RPCError{Code: -32000, Message: "failed to get nonce: " + err.Error()}
 	}
-	txNonce := currentNonce + 1
+	txNonce := currentNonce // Use current nonce, NOT +1!
 
 	tx := &types.Transaction{
 		From:      req.From,
