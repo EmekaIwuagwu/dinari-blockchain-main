@@ -19,17 +19,17 @@ const (
 
 // Transaction represents a transfer of tokens between addresses
 type Transaction struct {
-	Hash      [32]byte       `json:"hash"`
-	From      string         `json:"from"`
-	To        string         `json:"to"`
-	Amount    *big.Int       `json:"amount"`
-	TokenType string         `json:"tokenType"`
-	FeeDNT    *big.Int       `json:"fee"`
-	Nonce     uint64         `json:"nonce"`
-	Timestamp int64          `json:"timestamp"`
-	Signature []byte         `json:"signature"`
-	PublicKey []byte         `json:"publicKey"`
-	MultiSig  *MultiSigData  `json:"multisig,omitempty"` // NEW: Multi-signature support
+	Hash      [32]byte      `json:"hash"`
+	From      string        `json:"from"`
+	To        string        `json:"to"`
+	Amount    *big.Int      `json:"amount"`
+	TokenType string        `json:"tokenType"`
+	FeeDNT    *big.Int      `json:"fee"`
+	Nonce     uint64        `json:"nonce"`
+	Timestamp int64         `json:"timestamp"`
+	Signature []byte        `json:"signature"`
+	PublicKey []byte        `json:"publicKey"`
+	MultiSig  *MultiSigData `json:"multisig,omitempty"` // NEW: Multi-signature support
 }
 
 // NewTransaction creates a new transaction
@@ -118,7 +118,13 @@ func DeserializeTransaction(data []byte) (*Transaction, error) {
 	return &tx, nil
 }
 
-// Size returns the approximate size of the transaction in bytes
+// Size returns the size of the transaction in bytes by serializing it to JSON.
+// This size is used by the mempool for fee calculation and transaction validation.
+// The returned size is always greater than zero for valid transactions.
+//
+// IMPORTANT: This method must be called to set the Size field when converting
+// transactions to mempool format. Transactions with zero size will be rejected
+// by the mempool.
 func (tx *Transaction) Size() int {
 	data, _ := tx.Serialize()
 	return len(data)
@@ -184,6 +190,13 @@ func (tx *Transaction) Validate() error {
 		return ErrInvalidTxHash
 	}
 
+	// Validate that transaction has a valid non-zero size
+	// This ensures the transaction can be properly serialized
+	txSize := tx.Size()
+	if txSize <= 0 {
+		return ErrInvalidTxSize
+	}
+
 	return nil
 }
 
@@ -207,7 +220,7 @@ func (tx *Transaction) Copy() *Transaction {
 		Signature: append([]byte{}, tx.Signature...),
 		PublicKey: append([]byte{}, tx.PublicKey...),
 	}
-	
+
 	// Copy MultiSig if present
 	if tx.MultiSig != nil {
 		newTx.MultiSig = &MultiSigData{
@@ -220,7 +233,7 @@ func (tx *Transaction) Copy() *Transaction {
 			newTx.MultiSig.Threshold = new(big.Int).Set(tx.MultiSig.Threshold)
 		}
 	}
-	
+
 	return newTx
 }
 
