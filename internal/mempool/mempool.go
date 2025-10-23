@@ -128,26 +128,36 @@ func NewMempool() *Mempool {
 
 // AddTransaction adds a transaction to the mempool with validation
 func (mp *Mempool) AddTransaction(tx *Transaction) error {
+	// 1. Check if transaction is nil first
 	if tx == nil {
 		return errors.New("transaction cannot be nil")
+	}
+	
+	// 2. CRITICAL FIX: Validate transaction size BEFORE any division operations
+	if tx.Size <= 0 {
+		mp.mu.Lock()
+		mp.stats.RejectedCount++
+		mp.mu.Unlock()
+		return errors.New("transaction size must be greater than zero")
+	}
+	
+	if tx.Size > MaxTxSize {
+		mp.mu.Lock()
+		mp.stats.RejectedCount++
+		mp.mu.Unlock()
+		return ErrTransactionTooLarge
 	}
 	
 	mp.mu.Lock()
 	defer mp.mu.Unlock()
 	
-	// 1. Check transaction size
-	if tx.Size > MaxTxSize {
-		mp.stats.RejectedCount++
-		return ErrTransactionTooLarge
-	}
-	
-	// 2. Check for duplicate
+	// 3. Check for duplicate
 	if _, exists := mp.txByHash[tx.Hash]; exists {
 		mp.stats.RejectedCount++
 		return ErrDuplicateTransaction
 	}
 	
-	// 3. Calculate fee per byte
+	// 4. Calculate fee per byte (NOW SAFE - tx.Size is guaranteed > 0)
 	feePerByte := new(big.Int).Div(tx.FeeDNT, big.NewInt(int64(tx.Size)))
 	if feePerByte.Cmp(mp.minFeePerByte) < 0 {
 		mp.stats.RejectedCount++
@@ -155,7 +165,7 @@ func (mp *Mempool) AddTransaction(tx *Transaction) error {
 	}
 	tx.FeePerByte = feePerByte
 	
-	// 4. Check address transaction limit
+	// 5. Check address transaction limit
 	addrTxs := mp.txByAddress[tx.From]
 	if len(addrTxs) >= mp.maxTxPerAddress {
 		// Try to evict lowest fee tx from same address
@@ -165,7 +175,7 @@ func (mp *Mempool) AddTransaction(tx *Transaction) error {
 		}
 	}
 	
-	// 5. Check for Replace-By-Fee (RBF)
+	// 6. Check for Replace-By-Fee (RBF)
 	if existingTx, exists := mp.getTxByNonce(tx.From, tx.Nonce); exists {
 		if err := mp.handleReplaceByFee(existingTx.Tx, tx); err != nil {
 			mp.stats.RejectedCount++
@@ -174,7 +184,7 @@ func (mp *Mempool) AddTransaction(tx *Transaction) error {
 		// RBF successful, old tx already removed
 	}
 	
-	// 6. Check if mempool is full
+	// 7. Check if mempool is full
 	if mp.stats.TotalTxs >= mp.maxSize {
 		// Try to evict lowest priority transaction
 		if !mp.evictLowestPriority(feePerByte) {
@@ -183,7 +193,7 @@ func (mp *Mempool) AddTransaction(tx *Transaction) error {
 		}
 	}
 	
-	// 7. Add transaction to mempool
+	// 8. Add transaction to mempool
 	mempoolTx := &MempoolTx{
 		Tx:       tx,
 		AddedAt:  time.Now(),
