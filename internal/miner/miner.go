@@ -38,6 +38,7 @@ type BlockchainInterface interface {
 	GetDifficulty() uint32
 	AddBlock(block *types.Block) error
 	CalculateBlockHash(header *types.BlockHeader) []byte
+	GetAccountNonce(address string) (uint64, error)
 }
 
 // MempoolInterface defines what miner needs from mempool
@@ -681,7 +682,7 @@ func (m *Miner) selectTransactions(txs []*types.Transaction) ([]*types.Transacti
 		expectedNonce, exists := addressNonces[tx.From]
 		if !exists {
 			// First transaction from this address - get nonce from state
-			stateNonce, err := m.blockchain.State.GetNonce(tx.From)
+			stateNonce, err := m.blockchain.GetAccountNonce(tx.From)
 			if err != nil {
 				// If account doesn't exist, expected nonce is 0
 				expectedNonce = 0

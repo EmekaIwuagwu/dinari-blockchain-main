@@ -1211,6 +1211,11 @@ func (bc *Blockchain) GetBestHash() []byte {
 	return bc.chainState.BestHash
 }
 
+// GetAccountNonce retrieves the nonce for an account from state
+func (bc *Blockchain) GetAccountNonce(address string) (uint64, error) {
+	return bc.State.GetNonce(address)
+}
+
 // Utility functions
 
 func encodeUint64(n uint64) []byte {
