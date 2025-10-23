@@ -20,13 +20,13 @@ type StateSnapshot struct {
 
 // StateTransition represents a pending state change
 type StateTransition struct {
-	ID            string
-	Operations    []StateOperation
-	Snapshot      *StateSnapshot
-	Committed     bool
-	RolledBack    bool
-	CreatedAt     time.Time
-	mu            sync.Mutex
+	ID         string
+	Operations []StateOperation
+	Snapshot   *StateSnapshot
+	Committed  bool
+	RolledBack bool
+	CreatedAt  time.Time
+	mu         sync.Mutex
 }
 
 // StateOperation represents a single state change
@@ -48,13 +48,13 @@ const (
 
 // AtomicState provides atomic, rollback-capable state management
 type AtomicState struct {
-	currentState   map[string][]byte
-	pendingTxns    map[string]*StateTransition
-	snapshots      []*StateSnapshot
-	maxSnapshots   int
-	mu             sync.RWMutex
-	db             Database
-	auditLog       []AuditEntry
+	currentState map[string][]byte
+	pendingTxns  map[string]*StateTransition
+	snapshots    []*StateSnapshot
+	maxSnapshots int
+	mu           sync.RWMutex
+	db           Database
+	auditLog     []AuditEntry
 }
 
 // Database interface for persistence
@@ -152,12 +152,12 @@ func (s *AtomicState) calculateStateRoot(data map[string][]byte) []byte {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	
+
 	for _, k := range keys {
 		h.Write([]byte(k))
 		h.Write(data[k])
 	}
-	
+
 	return h.Sum(nil)
 }
 
@@ -231,7 +231,7 @@ func (s *AtomicState) Commit(txnID string) error {
 
 	// Prepare batch operations for database
 	batchOps := make([]BatchOp, 0, len(txn.Operations))
-	
+
 	// Apply operations to in-memory state and prepare DB batch
 	for _, op := range txn.Operations {
 		switch op.Type {
@@ -242,7 +242,7 @@ func (s *AtomicState) Commit(txnID string) error {
 				Key:   op.Key,
 				Value: op.NewValue,
 			})
-			
+
 			// Audit log
 			s.auditLog = append(s.auditLog, AuditEntry{
 				Timestamp: time.Now(),
@@ -259,7 +259,7 @@ func (s *AtomicState) Commit(txnID string) error {
 				Type: "delete",
 				Key:  op.Key,
 			})
-			
+
 			// Audit log
 			s.auditLog = append(s.auditLog, AuditEntry{
 				Timestamp: time.Now(),
@@ -327,7 +327,7 @@ func (s *AtomicState) Rollback(txnID string) error {
 func (s *AtomicState) rollbackMemoryState(txn *StateTransition) {
 	// Clear current state
 	s.currentState = make(map[string][]byte)
-	
+
 	// Restore from snapshot
 	for k, v := range txn.Snapshot.Data {
 		valueCopy := make([]byte, len(v))
@@ -339,7 +339,7 @@ func (s *AtomicState) rollbackMemoryState(txn *StateTransition) {
 // addSnapshot adds a snapshot to history with rotation
 func (s *AtomicState) addSnapshot(snapshot *StateSnapshot) {
 	s.snapshots = append(s.snapshots, snapshot)
-	
+
 	// Rotate old snapshots
 	if len(s.snapshots) > s.maxSnapshots {
 		s.snapshots = s.snapshots[1:]
@@ -388,7 +388,7 @@ func (s *AtomicState) RollbackToHeight(height uint64) error {
 func (s *AtomicState) GetAuditLog() []AuditEntry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	logCopy := make([]AuditEntry, len(s.auditLog))
 	copy(logCopy, s.auditLog)
 	return logCopy
@@ -398,6 +398,6 @@ func (s *AtomicState) GetAuditLog() []AuditEntry {
 func (s *AtomicState) ExportAuditLog() ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	return json.Marshal(s.auditLog)
 }
