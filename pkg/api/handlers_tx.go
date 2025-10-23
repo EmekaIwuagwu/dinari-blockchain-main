@@ -236,6 +236,82 @@ func (s *Server) handleTxGetByAddress(params json.RawMessage) (interface{}, *RPC
 	}, nil
 }
 
+// handleTxGetHistory returns confirmed transaction history for an address from blocks
+func (s *Server) handleTxGetHistory(params json.RawMessage) (interface{}, *RPCError) {
+	var req struct {
+		Address string `json:"address"`
+		Limit   int    `json:"limit"`
+	}
+
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, &RPCError{Code: -32602, Message: "invalid params"}
+	}
+
+	// Validate address
+	if req.Address == "" {
+		return nil, &RPCError{Code: -32602, Message: "address is required"}
+	}
+
+	if req.Limit <= 0 || req.Limit > 100 {
+		req.Limit = 20
+	}
+
+	// Get blockchain height
+	height := s.blockchain.GetHeight()
+
+	// Collect transactions from recent blocks
+	allTxs := make([]map[string]interface{}, 0)
+	blocksToScan := uint64(100) // Scan last 100 blocks
+	startHeight := uint64(0)
+	if height > blocksToScan {
+		startHeight = height - blocksToScan
+	}
+
+	// Scan blocks from newest to oldest
+	for h := height; h > startHeight && len(allTxs) < req.Limit*2; h-- {
+		block, err := s.blockchain.GetBlockByHeight(h)
+		if err != nil {
+			continue
+		}
+
+		// Check each transaction in the block
+		for _, tx := range block.Transactions {
+			// Include if address is sender or recipient
+			if tx.From == req.Address || tx.To == req.Address {
+				txData := map[string]interface{}{
+					"hash":        fmt.Sprintf("0x%x", tx.Hash),
+					"from":        tx.From,
+					"to":          tx.To,
+					"amount":      tx.Amount.String(),
+					"tokenType":   tx.TokenType,
+					"fee":         tx.FeeDNT.String(),
+					"nonce":       tx.Nonce,
+					"timestamp":   tx.Timestamp,
+					"blockNumber": block.Header.Height,
+					"blockHash":   fmt.Sprintf("0x%x", block.Header.Hash),
+					"status":      "confirmed",
+				}
+				allTxs = append(allTxs, txData)
+			}
+		}
+	}
+
+	// Limit results
+	limit := req.Limit
+	if len(allTxs) < limit {
+		limit = len(allTxs)
+	}
+	result := allTxs[:limit]
+
+	return map[string]interface{}{
+		"transactions": result,
+		"total":        len(allTxs),
+		"returned":     limit,
+		"address":      req.Address,
+		"blocksScanned": height - startHeight,
+	}, nil
+}
+
 // handleTxGetStats returns mempool statistics
 func (s *Server) handleTxGetStats(params json.RawMessage) (interface{}, *RPCError) {
 	stats := s.mempool.GetStats()

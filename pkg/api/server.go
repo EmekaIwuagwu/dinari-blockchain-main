@@ -221,6 +221,14 @@ func (s *Server) HandleTxGetByAddress(ctx context.Context, params json.RawMessag
 	return result, nil
 }
 
+func (s *Server) HandleTxGetHistory(ctx context.Context, params json.RawMessage) (interface{}, error) {
+	result, rpcErr := s.handleTxGetHistory(params)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	return result, nil
+}
+
 func (s *Server) HandleTxGetStats(ctx context.Context, params json.RawMessage) (interface{}, error) {
 	result, rpcErr := s.handleTxGetStats(params)
 	if rpcErr != nil {

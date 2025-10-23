@@ -675,6 +675,7 @@ func initializeNode(ctx context.Context, logger *zap.Logger, config *Config) (*N
 	rpcServer.RegisterMethod("tx_getPending", rpcServer.HandleTxGetPending)
 	rpcServer.RegisterMethod("tx_listByWallet", rpcServer.HandleTxGetByAddress)
 	rpcServer.RegisterMethod("tx_getByAddress", rpcServer.HandleTxGetByAddress)
+	rpcServer.RegisterMethod("tx_getHistory", rpcServer.HandleTxGetHistory)
 	rpcServer.RegisterMethod("tx_getStats", rpcServer.HandleTxGetStats)
 
 	rpcServer.RegisterMethod("wallet_create", rpcServer.HandleWalletCreate)
