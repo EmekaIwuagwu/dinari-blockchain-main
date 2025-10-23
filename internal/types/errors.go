@@ -28,6 +28,7 @@ var (
 	ErrInvalidSignature     = errors.New("invalid signature")
 	ErrMissingSignature     = errors.New("missing signature")
 	ErrMissingPublicKey     = errors.New("missing public key")
+	ErrInvalidTxSize        = errors.New("invalid transaction size: must be greater than zero")
 	ErrTxTooLarge           = errors.New("transaction exceeds maximum size")
 	ErrFeeTooLow            = errors.New("fee too low")
 	ErrInsufficientBalance  = errors.New("insufficient balance")

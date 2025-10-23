@@ -3,14 +3,14 @@ package api
 import (
 	"encoding/hex"
 	"encoding/json"
-	"math/big"
-	"time"
-	"sort"
 	"fmt"
+	"math/big"
+	"sort"
+	"time"
 
 	"github.com/EmekaIwuagwu/dinari-blockchain/internal/types"
-	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/EmekaIwuagwu/dinari-blockchain/pkg/crypto"
+	"github.com/btcsuite/btcd/btcec/v2"
 )
 
 // sortTransactionsByTimestamp sorts transactions by timestamp (newest first)
@@ -19,18 +19,17 @@ func sortTransactionsByTimestamp(txs []interface{}) {
 		// Extract timestamps from the transaction interfaces
 		txI := txs[i].(map[string]interface{})
 		txJ := txs[j].(map[string]interface{})
-		
+
 		timeI, okI := txI["timestamp"].(int64)
 		timeJ, okJ := txJ["timestamp"].(int64)
-		
+
 		if !okI || !okJ {
 			return false
 		}
-		
+
 		return timeI > timeJ // Descending order (newest first)
 	})
 }
-
 
 // handleTxSend sends a new transaction
 func (s *Server) handleTxSend(params json.RawMessage) (interface{}, *RPCError) {
@@ -166,7 +165,7 @@ func (s *Server) handleTxGetPending(params json.RawMessage) (interface{}, *RPCEr
 	}
 
 	allTxs := s.mempool.GetPendingTransactions(req.Limit * 2)
-	
+
 	limit := req.Limit
 	if len(allTxs) < limit {
 		limit = len(allTxs)
@@ -206,16 +205,16 @@ func (s *Server) handleTxGetByAddress(params json.RawMessage) (interface{}, *RPC
 
 	// Get transactions for the address
 	txs := s.mempool.GetTransactionsByAddress(req.Address)
-	
+
 	// Format all transactions first
 	formattedTxs := make([]interface{}, len(txs))
 	for i := 0; i < len(txs); i++ {
 		formattedTxs[i] = formatMempoolTransaction(txs[i])
 	}
-	
+
 	// CRITICAL: Sort formatted transactions by timestamp (newest first)
 	sortTransactionsByTimestamp(formattedTxs)
-	
+
 	limit := req.Limit
 	if len(formattedTxs) < limit {
 		limit = len(formattedTxs)
@@ -231,10 +230,9 @@ func (s *Server) handleTxGetByAddress(params json.RawMessage) (interface{}, *RPC
 		"address":      req.Address,
 	}, nil
 }
+
 // handleTxGetStats returns mempool statistics
 func (s *Server) handleTxGetStats(params json.RawMessage) (interface{}, *RPCError) {
 	stats := s.mempool.GetStats()
 	return stats, nil
 }
-
-

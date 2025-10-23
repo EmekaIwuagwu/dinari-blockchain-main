@@ -15,7 +15,7 @@ func NewMempoolAdapter(mp *Mempool) *MempoolAdapter {
 
 func (a *MempoolAdapter) GetPendingTransactions(limit int) []*types.Transaction {
 	mempoolTxs := a.mempool.GetPendingTransactions(limit)
-	
+
 	// Convert mempool.Transaction to types.Transaction
 	result := make([]*types.Transaction, len(mempoolTxs))
 	for i, tx := range mempoolTxs {
@@ -27,7 +27,7 @@ func (a *MempoolAdapter) GetPendingTransactions(limit int) []*types.Transaction 
 				hash[j] = byte(tx.Hash[j])
 			}
 		}
-		
+
 		result[i] = &types.Transaction{
 			Hash:      hash,
 			From:      tx.From,
@@ -41,7 +41,7 @@ func (a *MempoolAdapter) GetPendingTransactions(limit int) []*types.Transaction 
 			PublicKey: tx.PublicKey,
 		}
 	}
-	
+
 	return result
 }
 

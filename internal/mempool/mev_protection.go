@@ -15,16 +15,16 @@ import (
 type MEVProtection struct {
 	// Fair ordering mechanism
 	orderingStrategy OrderingStrategy
-	
+
 	// Transaction commitments
 	commitments map[string]*TxCommitment
-	
+
 	// VRF for random ordering
 	vrfKey []byte
-	
+
 	// Configuration
 	config *MEVConfig
-	
+
 	mu sync.RWMutex
 }
 
@@ -44,10 +44,10 @@ type MEVConfig struct {
 type OrderingStrategy int
 
 const (
-	FIFO OrderingStrategy = iota // First In First Out
-	FairRandom                    // Random with VRF
-	BatchAuction                  // Batch auctions
-	CommitReveal                  // Commit-reveal scheme
+	FIFO         OrderingStrategy = iota // First In First Out
+	FairRandom                           // Random with VRF
+	BatchAuction                         // Batch auctions
+	CommitReveal                         // Commit-reveal scheme
 )
 
 // TxCommitment represents a committed transaction
@@ -127,11 +127,11 @@ func (mev *MEVProtection) OrderTransactions(txs []*PendingTransaction) ([]*Pendi
 func (mev *MEVProtection) orderFIFO(txs []*PendingTransaction) []*PendingTransaction {
 	ordered := make([]*PendingTransaction, len(txs))
 	copy(ordered, txs)
-	
+
 	sort.Slice(ordered, func(i, j int) bool {
 		return ordered[i].Timestamp.Before(ordered[j].Timestamp)
 	})
-	
+
 	return ordered
 }
 
@@ -146,8 +146,8 @@ func (mev *MEVProtection) orderFairRandom(txs []*PendingTransaction) ([]*Pending
 
 	// Assign random priorities using VRF
 	type txWithRand struct {
-		tx       *PendingTransaction
-		randVal  *big.Int
+		tx      *PendingTransaction
+		randVal *big.Int
 	}
 
 	rankedTxs := make([]txWithRand, len(txs))
@@ -182,16 +182,16 @@ func (mev *MEVProtection) orderBatchAuction(txs []*PendingTransaction) []*Pendin
 
 	// Group transactions by price bands to prevent extreme priority fee variance
 	priceBands := mev.groupByPriceBands(txs)
-	
+
 	ordered := make([]*PendingTransaction, 0, len(txs))
-	
+
 	// Process each price band
 	for _, band := range priceBands {
 		// Within each band, use fair random ordering
 		bandOrdered, _ := mev.orderFairRandom(band)
 		ordered = append(ordered, bandOrdered...)
 	}
-	
+
 	return ordered
 }
 
@@ -204,7 +204,7 @@ func (mev *MEVProtection) groupByPriceBands(txs []*PendingTransaction) [][]*Pend
 	// Find min and max gas prices
 	minPrice := new(big.Int).Set(txs[0].GasPrice)
 	maxPrice := new(big.Int).Set(txs[0].GasPrice)
-	
+
 	for _, tx := range txs {
 		if tx.GasPrice.Cmp(minPrice) < 0 {
 			minPrice.Set(tx.GasPrice)
@@ -222,7 +222,7 @@ func (mev *MEVProtection) groupByPriceBands(txs []*PendingTransaction) [][]*Pend
 
 	// Simple banding: group transactions within variance threshold
 	bands := make(map[int][]*PendingTransaction)
-	
+
 	for _, tx := range txs {
 		// Calculate band index based on price
 		bandIdx := mev.calculateBandIndex(tx.GasPrice, minPrice, maxPrice, variance)
@@ -256,12 +256,12 @@ func (mev *MEVProtection) calculateBandIndex(price, minPrice, maxPrice *big.Int,
 
 	// Calculate position in range
 	position := new(big.Int).Sub(price, minPrice)
-	
+
 	// Determine band
 	if bandWidth.Sign() == 0 {
 		return 0
 	}
-	
+
 	bandIdx := new(big.Int).Div(position, bandWidth)
 	return int(bandIdx.Int64())
 }
@@ -354,7 +354,7 @@ func (mev *MEVProtection) vrfDeterministicRandom(seed, input []byte) *big.Int {
 	h.Write(seed)
 	h.Write(input)
 	hash := h.Sum(nil)
-	
+
 	return new(big.Int).SetBytes(hash)
 }
 
@@ -364,7 +364,7 @@ func (mev *MEVProtection) DetectFrontRunning(txs []*PendingTransaction) []Alert 
 
 	// Group transactions by recipient and amount patterns
 	patterns := make(map[string][]*PendingTransaction)
-	
+
 	for _, tx := range txs {
 		// Simple pattern: hash recipient address and amount range
 		patternKey := mev.generatePatternKey(tx)
@@ -433,12 +433,12 @@ func bytesEqual(a, b []byte) bool {
 	if len(a) != len(b) {
 		return false
 	}
-	
+
 	result := byte(0)
 	for i := range a {
 		result |= a[i] ^ b[i]
 	}
-	
+
 	return result == 0
 }
 
