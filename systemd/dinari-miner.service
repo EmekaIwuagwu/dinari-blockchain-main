@@ -23,7 +23,7 @@ ExecStart=/opt/dinari/bin/dinari-node \
     --datadir=/var/lib/dinari/miner-data \
     --rpc=0.0.0.0:8546 \
     --p2p=/ip4/0.0.0.0/tcp/9001 \
-    --miner=DPxvxeHsN3qPvenSZd9SQxiwf5bQ7jGhst \
+    --miner=DF9CM1gPNpPkE6xUN6A1JUtz2vSygXvtLT \
     --mine \
     --loglevel=info
 
