@@ -792,7 +792,7 @@ func (m *Miner) IsRunning() bool {
 }
 
 // GetStats returns the current mining statistics
-func (m *Miner) GetStats() MiningStats {
+func (m *Miner) GetStats() interface{} {
 	m.statsMu.Lock()
 	defer m.statsMu.Unlock()
 
@@ -803,16 +803,17 @@ func (m *Miner) GetStats() MiningStats {
 	}
 	m.stats.TotalHashrate = totalHashrate
 
-	// Return a copy of stats
-	return MiningStats{
-		BlocksMined:         m.stats.BlocksMined,
-		BlocksRejected:      m.stats.BlocksRejected,
-		TimestampRejections: m.stats.TimestampRejections,
-		TotalHashrate:       totalHashrate,
-		LastBlockTime:       m.stats.LastBlockTime,
-		TotalReward:         new(big.Int).Set(m.stats.TotalReward),
-		TotalFees:           new(big.Int).Set(m.stats.TotalFees),
-		AverageBlockTime:    m.stats.AverageBlockTime,
+	// Return a map for JSON serialization
+	return map[string]interface{}{
+		"blocksMined":         m.stats.BlocksMined,
+		"blocksRejected":      m.stats.BlocksRejected,
+		"timestampRejections": m.stats.TimestampRejections,
+		"totalHashrate":       totalHashrate,
+		"lastBlockTime":       m.stats.LastBlockTime.Unix(),
+		"totalReward":         m.stats.TotalReward.String(),
+		"totalFees":           m.stats.TotalFees.String(),
+		"averageBlockTime":    m.stats.AverageBlockTime.Seconds(),
+		"workers":             len(m.workers),
 	}
 }
 
