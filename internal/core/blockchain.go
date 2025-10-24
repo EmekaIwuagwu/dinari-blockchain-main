@@ -462,7 +462,12 @@ func (bc *Blockchain) validateTimestamp(header, prevHeader *BlockHeader) error {
 			ErrInvalidTimestamp, timeDiff, minInterval)
 	}
 
-	maxInterval := int64(300)
+	// Allow up to 24 hours between blocks to handle node restarts, network issues, etc.
+	// This is much more permissive than Bitcoin's 2-hour future limit, but necessary for:
+	// - Initial blockchain startup (genesis to block 1)
+	// - Node downtime and restarts
+	// - Development and testing scenarios
+	maxInterval := int64(86400) // 24 hours
 	if timeDiff > maxInterval {
 		return fmt.Errorf("%w: block interval too large - got %d seconds, maximum %d seconds",
 			ErrInvalidTimestamp, timeDiff, maxInterval)
