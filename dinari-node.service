@@ -1,0 +1,47 @@
+[Unit]
+Description=Dinari Blockchain Node
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dinari
+Group=dinari
+WorkingDirectory=/home/dinari/dinari-blockchain-main
+
+# Environment
+Environment="HOME=/home/dinari"
+Environment="PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# HTTPS/TLS Configuration
+Environment="RPC_TLS_ENABLED=true"
+Environment="RPC_TLS_CERT=/home/dinari/dinari-blockchain-main/certs/server.crt"
+Environment="RPC_TLS_KEY=/home/dinari/dinari-blockchain-main/certs/server.key"
+
+# Executable with proper flags - CORRECT PATH
+ExecStart=/home/dinari/dinari-blockchain-main/bin/dinari-node \
+    --datadir=/home/dinari/.dinari \
+    --rpc=0.0.0.0:8545 \
+    --p2p=/ip4/0.0.0.0/tcp/9000 \
+    --metrics=:9090 \
+    --loglevel=info \
+    --dev \
+    --mine \
+    --miner=DF9CM1gPNpPkE6xUN6A1JUtz2vSygXvtLT \
+    --validate
+
+# Restart policy
+Restart=always
+RestartSec=10
+StartLimitInterval=200
+StartLimitBurst=5
+
+# Resource limits
+LimitNOFILE=65536
+
+# Logging
+StandardOutput=append:/home/dinari/dinari-node.log
+StandardError=append:/home/dinari/dinari-error.log
+
+[Install]
+WantedBy=multi-user.target
