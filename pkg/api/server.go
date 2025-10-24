@@ -671,10 +671,17 @@ func (s *Server) buildTLSConfig() *tls.Config {
 	return &tls.Config{
 		MinVersion:               s.config.TLSMinVersion,
 		PreferServerCipherSuites: true,
+		// Include both TLS 1.2 and TLS 1.3 cipher suites for HTTP/2 compatibility
 		CipherSuites: []uint16{
+			// TLS 1.3 ciphers (required for modern security)
 			tls.TLS_AES_256_GCM_SHA384,
 			tls.TLS_AES_128_GCM_SHA256,
 			tls.TLS_CHACHA20_POLY1305_SHA256,
+			// TLS 1.2 ciphers (required for HTTP/2)
+			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
 		},
 		CurvePreferences: []tls.CurveID{
 			tls.X25519,
