@@ -648,9 +648,9 @@ func initializeNode(ctx context.Context, logger *zap.Logger, config *Config) (*N
 		RequestTimeout:     30 * time.Second,
 		ReadTimeout:        15 * time.Second,
 		WriteTimeout:       30 * time.Second,
-		MaxRequestSize:     1 << 20,        // 1MB
-		CORSEnabled:        config.DevMode, // Only in dev mode
-		CORSAllowedOrigins: []string{"*"},
+		MaxRequestSize:     1 << 20, // 1MB
+		CORSEnabled:        true,    // Enable CORS for blockchain explorer
+		CORSAllowedOrigins: []string{"*"}, // Allow all origins for public blockchain explorer
 		AuthEnabled:        !config.DevMode, // Enable in production
 		RateLimitEnabled:   !config.DevMode, // Enable in production
 		LogRequests:        true,
