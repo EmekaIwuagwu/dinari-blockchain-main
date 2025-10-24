@@ -786,6 +786,42 @@ func (m *Miner) Stop() {
 	fmt.Println("✅ Miner stopped")
 }
 
+// IsRunning returns whether the miner is currently running
+func (m *Miner) IsRunning() bool {
+	return m.mining.Load()
+}
+
+// GetStats returns the current mining statistics
+func (m *Miner) GetStats() interface{} {
+	m.statsMu.Lock()
+	defer m.statsMu.Unlock()
+
+	// Calculate total hashrate from all workers
+	totalHashrate := uint64(0)
+	for _, w := range m.workers {
+		totalHashrate += atomic.LoadUint64(&w.hashrate)
+	}
+	m.stats.TotalHashrate = totalHashrate
+
+	// Return a map for JSON serialization
+	return map[string]interface{}{
+		"blocksMined":         m.stats.BlocksMined,
+		"blocksRejected":      m.stats.BlocksRejected,
+		"timestampRejections": m.stats.TimestampRejections,
+		"totalHashrate":       totalHashrate,
+		"lastBlockTime":       m.stats.LastBlockTime.Unix(),
+		"totalReward":         m.stats.TotalReward.String(),
+		"totalFees":           m.stats.TotalFees.String(),
+		"averageBlockTime":    m.stats.AverageBlockTime.Seconds(),
+		"workers":             len(m.workers),
+	}
+}
+
+// GetMinerAddress returns the miner's reward address
+func (m *Miner) GetMinerAddress() string {
+	return m.minerAddress
+}
+
 func formatAmount(amount *big.Int) string {
 	if amount == nil {
 		return "0"

@@ -681,6 +681,14 @@ func initializeNode(ctx context.Context, logger *zap.Logger, config *Config) (*N
 	rpcServer.RegisterMethod("wallet_create", rpcServer.HandleWalletCreate)
 	rpcServer.RegisterMethod("wallet_balance", rpcServer.HandleWalletBalance)
 
+	// Register miner endpoints (will be functional if miner is enabled)
+	rpcServer.RegisterMethod("miner_start", rpcServer.HandleMinerStart)
+	rpcServer.RegisterMethod("miner_stop", rpcServer.HandleMinerStop)
+	rpcServer.RegisterMethod("miner_status", rpcServer.HandleMinerStatus)
+
+	// Register mint endpoint
+	rpcServer.RegisterMethod("mint_afc", rpcServer.HandleMintAFC)
+
 	node.rpcServer = rpcServer
 	logger.Info("✅ RPC server initialized with all handlers")
 
@@ -709,6 +717,7 @@ func initializeNode(ctx context.Context, logger *zap.Logger, config *Config) (*N
 		)
 
 		node.minerService = minerInst
+		rpcServer.SetMiner(minerInst) // Set miner on RPC server for API control
 		logger.Info("✅ PRODUCTION miner initialized")
 	} else {
 		logger.Info("Mining disabled")
