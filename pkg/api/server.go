@@ -119,12 +119,22 @@ func (e *RPCError) Error() string {
 
 type HandlerFunc func(ctx context.Context, params json.RawMessage) (interface{}, error)
 
+// MinerInterface defines the interface for miner operations
+type MinerInterface interface {
+	Start() error
+	Stop()
+	IsRunning() bool
+	GetStats() interface{}
+	GetMinerAddress() string
+}
+
 type Server struct {
 	config     *ServerConfig
 	server     *http.Server
 	handlers   map[string]HandlerFunc
 	blockchain *core.Blockchain
 	mempool    *mempool.Mempool
+	miner      MinerInterface
 	logger     *zap.Logger
 	limiters   map[string]*rate.Limiter
 	limitersMu sync.RWMutex
@@ -184,6 +194,10 @@ func (s *Server) SetBlockchain(blockchain *core.Blockchain) {
 
 func (s *Server) SetMempool(mempool *mempool.Mempool) {
 	s.mempool = mempool
+}
+
+func (s *Server) SetMiner(miner MinerInterface) {
+	s.miner = miner
 }
 
 // Export handler methods - properly convert RPCError to error
@@ -271,6 +285,40 @@ func (s *Server) HandleChainGetHeight(ctx context.Context, params json.RawMessag
 
 func (s *Server) HandleChainGetStats(ctx context.Context, params json.RawMessage) (interface{}, error) {
 	result, rpcErr := s.handleChainGetStats(params)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	return result, nil
+}
+
+// Miner handler wrappers
+func (s *Server) HandleMinerStart(ctx context.Context, params json.RawMessage) (interface{}, error) {
+	result, rpcErr := s.handleMinerStart(params)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	return result, nil
+}
+
+func (s *Server) HandleMinerStop(ctx context.Context, params json.RawMessage) (interface{}, error) {
+	result, rpcErr := s.handleMinerStop(params)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	return result, nil
+}
+
+func (s *Server) HandleMinerStatus(ctx context.Context, params json.RawMessage) (interface{}, error) {
+	result, rpcErr := s.handleMinerStatus(params)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	return result, nil
+}
+
+// Mint handler wrapper
+func (s *Server) HandleMintAFC(ctx context.Context, params json.RawMessage) (interface{}, error) {
+	result, rpcErr := s.handleMintAFC(params)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}

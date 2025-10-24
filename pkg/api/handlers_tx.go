@@ -272,14 +272,11 @@ func (s *Server) handleTxGetHistory(params json.RawMessage) (interface{}, *RPCEr
 
 	// Collect transactions from recent blocks
 	allTxs := make([]map[string]interface{}, 0)
-	blocksToScan := uint64(100) // Scan last 100 blocks
+	// Scan all blocks to show complete transaction history
 	startHeight := uint64(0)
-	if height > blocksToScan {
-		startHeight = height - blocksToScan
-	}
 
 	// Scan blocks from newest to oldest
-	for h := height; h > startHeight && len(allTxs) < req.Limit*2; h-- {
+	for h := height; h > startHeight && len(allTxs) < req.Limit*10; h-- {
 		block, err := s.blockchain.GetBlockByHeight(h)
 		if err != nil {
 			continue
